@@ -8,12 +8,15 @@
 // - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
 //   generated/cosmetic.json are inserted with scripting.insertCSS as user styles (one rule per
 //   selector, like build_cosmetic_css() of the desktop browser) - the page's CSP cannot stop them.
+// - Discord stream mode: content/discord_hint.js on streaming sites points to the browser's
+//   hardware acceleration setting (an extension cannot switch it itself).
 'use strict';
 
 const DEFAULT_SETTINGS = {
     enabled: true,
     whitelist: [],      // domains without "www.", subdomains included
     rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
+    discordHint: true,  // banner on Netflix / Prime Video / Disney+ while hardware acceleration is on
 };
 // above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
 const WHITELIST_PRIORITY = 100;
@@ -23,6 +26,12 @@ const SITE_SCRIPTS = [
     {id: 'ab-youtube', matches: ['*://*.youtube.com/*'], js: ['generated/youtube.js']},
     {id: 'ab-netflix', matches: ['*://*.netflix.com/*'], js: ['generated/netflix.js']},
 ];
+
+// DRM streaming sites that stay black in Discord's screen share with hardware acceleration
+const AMAZON_VIDEO = ['de', 'com', 'co.uk', 'fr', 'it', 'es', 'nl'].reduce(function (list, tld) {
+    return list.concat(['*://*.amazon.' + tld + '/gp/video/*', '*://*.amazon.' + tld + '/-/*/gp/video/*']);
+}, []);
+const STREAMING_SITES = ['*://*.netflix.com/*', '*://*.primevideo.com/*', '*://*.disneyplus.com/*'].concat(AMAZON_VIDEO);
 
 // ---- settings ----
 let settingsCache = null;
@@ -68,14 +77,21 @@ function excludePattern(domain) {
 
 // ---- content scripts ----
 function wantedContentScripts(settings) {
-    if (!settings.enabled) return [];
-    const exclude = settings.whitelist.map(excludePattern);
-    const scripts = SITE_SCRIPTS.map(function (s) {
-        return {id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true};
-    });
-    scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
-                  world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
-    scripts.forEach(function (s) { if (exclude.length) s.excludeMatches = exclude; });
+    const scripts = [];
+    if (settings.enabled) {
+        const exclude = settings.whitelist.map(excludePattern);
+        SITE_SCRIPTS.forEach(function (s) {
+            scripts.push({id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true});
+        });
+        scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
+                      world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
+        scripts.forEach(function (s) { if (exclude.length) s.excludeMatches = exclude; });
+    }
+    // not a blocker feature: independent of "protection off" and the exception list
+    if (settings.discordHint) {
+        scripts.push({id: 'ab-discord', matches: STREAMING_SITES, js: ['gpu.js', 'content/discord_hint.js'],
+                      world: 'ISOLATED', runAt: 'document_idle', allFrames: false});
+    }
     return scripts;
 }
 
@@ -241,6 +257,42 @@ async function onCosmeticMessage(msg, sender) {
     return {active: !ctx.generichide};
 }
 
+// ---- Discord stream mode ----
+// Both pages hold "Use graphics acceleration when available" (Opera also opens chrome:// URLs)
+function gpuSettingsUrl() {
+    return /\bOPR\//.test(navigator.userAgent) ? 'opera://settings/system' : 'chrome://settings/system';
+}
+
+async function openGpuSettings(tab) {
+    const props = {url: gpuSettingsUrl()};
+    if (tab) {
+        props.index = tab.index + 1;
+        props.windowId = tab.windowId;
+    }
+    await chrome.tabs.create(props);
+}
+
+function isStreamingSite(url) {
+    return /^https:\/\/([^/]+\.)?(netflix\.com|primevideo\.com|disneyplus\.com)\//.test(url) ||
+           /^https:\/\/([^/]+\.)?amazon\.[a-z.]+\/(-\/[^/]+\/)?gp\/video\//.test(url);
+}
+
+async function onDiscordMessage(msg, sender) {
+    if (msg.type === 'open-gpu-settings') {
+        await openGpuSettings(sender.tab);
+        return {};
+    }
+    if (msg.type === 'discord-hint-off') {
+        await saveSettings({discordHint: false});
+        return {};
+    }
+    // "discord-hint-check": the banner shows once per browser session
+    const settings = await getSettings();
+    if (!settings.discordHint || (await chrome.storage.session.get('discordHintShown')).discordHintShown) return {show: false};
+    await chrome.storage.session.set({discordHintShown: true});
+    return {show: true};
+}
+
 // ---- toolbar button ----
 async function updateAction(settings) {
     const on = settings.enabled;
@@ -296,6 +348,8 @@ async function tabState(tabId) {
             return {id: r.id, name: r.name, rules: r.rules, filters: r.filters, mode: r.mode,
                     wanted: rulesetWanted(r, settings), active: enabledNow.has(r.id)};
         }),
+        discordHint: settings.discordHint,
+        streaming: tab ? isStreamingSite(tab.url || '') : false,
     };
 }
 
@@ -315,6 +369,14 @@ async function onPopupMessage(msg) {
         await saveSettings({whitelist: list});
         return tabState(msg.tabId);
     }
+    if (msg.type === 'set-discord-hint') {
+        await saveSettings({discordHint: !!msg.enabled});
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'open-gpu-settings') {
+        await openGpuSettings(msg.tabId != null ? await chrome.tabs.get(msg.tabId).catch(function () { return null; }) : null);
+        return {};
+    }
     if (msg.type === 'set-ruleset') {
         const settings = await getSettings();
         const rulesets = Object.assign({}, settings.rulesets);
@@ -330,9 +392,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     const fail = function (e) { sendResponse({error: String(e && e.message || e)}); };
     if ((sender.url || '').startsWith(chrome.runtime.getURL(''))) {  // popup (also when opened as a tab)
         onPopupMessage(msg).then(sendResponse, fail);
-    } else {                                                          // content scripts
-        if (msg.type !== 'cosmetic-init' && msg.type !== 'cosmetic-classes') return false;
+    } else if (msg.type === 'cosmetic-init' || msg.type === 'cosmetic-classes') {  // content scripts
         onCosmeticMessage(msg, sender).then(sendResponse, fail);
+    } else if (['discord-hint-check', 'discord-hint-off', 'open-gpu-settings'].includes(msg.type)) {
+        onDiscordMessage(msg, sender).then(sendResponse, fail);
+    } else {
+        return false;
     }
     return true;
 });

@@ -16,6 +16,8 @@
 
 * { box-sizing: border-box; }
 
+html { overflow-x: hidden; }
+
 html, body {
     margin: 0;
     background: var(--bg0);
@@ -25,7 +27,7 @@ html, body {
 
 body {
     width: 340px;
-    padding: 14px;
+    padding: 12px;
     background:
         radial-gradient(120% 60% at 100% 0%, rgba(250, 30, 78, .16), transparent 60%),
         var(--bg0);
@@ -41,7 +43,7 @@ header {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 14px;
+    margin-bottom: 10px;
 }
 
 header img { width: 28px; height: 28px; filter: drop-shadow(0 0 6px var(--accent-glow)); }
@@ -58,8 +60,8 @@ h1 span { color: var(--accent); }
     background: var(--bg1);
     border: 1px solid var(--line);
     border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
 }
 
 h2 {
@@ -79,7 +81,7 @@ h2 {
     align-items: center;
     gap: 14px;
     width: 100%;
-    padding: 14px;
+    padding: 11px 14px;
     border-radius: 14px;
     border: 1px solid rgba(250, 30, 78, .75);
     background: rgba(250, 30, 78, .12);
@@ -210,6 +212,69 @@ h2 {
 }
 
 .row .label small.warn { color: #ffc400; }
+
+/* ---- collapsible cards ---- */
+details.card > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+}
+
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary h2 { flex: 1; margin: 0; }
+
+details.card > summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(45deg);
+    margin: -3px 2px 0 4px;
+    transition: transform .15s;
+}
+
+details.card[open] > summary::after { transform: rotate(225deg); margin-top: 3px; }
+details.card[open] > summary { margin-bottom: 8px; }
+
+.pill {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font: 600 11px/1.4 Bahnschrift, "Segoe UI", sans-serif;
+    letter-spacing: .03em;
+    white-space: nowrap;
+}
+
+.pill.ok { color: var(--ok); border-color: rgba(46, 232, 138, .45); }
+.pill.hot { color: var(--accent); border-color: rgba(250, 30, 78, .6); }
+.highlight { border-color: rgba(250, 30, 78, .75); box-shadow: 0 0 14px rgba(250, 30, 78, .2); }
+
+.action {
+    display: block;
+    width: 100%;
+    margin: 6px 0;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font: 600 13px/1.2 Bahnschrift, "Segoe UI", sans-serif;
+    letter-spacing: .04em;
+    cursor: pointer;
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.action:hover { filter: brightness(1.1); }
+.action.calm { background: var(--bg3); box-shadow: none; }
+
+.steps { margin: 4px 0 6px; padding-left: 18px; color: var(--muted); }
+.steps li + li { margin-top: 2px; }
+p.small { margin: 0 0 4px; }
 
 .note {
     margin-top: 6px;

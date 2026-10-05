@@ -38,13 +38,26 @@
     <div class="note hidden" id="reloadNote">Seite wird neu geladen …</div>
 </section>
 
-<section class="card" id="listsCard">
-    <h2>Filterlisten</h2>
+<details class="card" id="discordCard">
+    <summary><h2>Discord-Stream-Modus</h2><span class="pill" id="gpuPill">…</span></summary>
+    <p class="small" id="gpuText"></p>
+    <button id="gpuSettings" class="action" type="button">Hardware-Beschleunigung aus</button>
+    <ol class="steps small" id="gpuSteps"></ol>
+    <p class="small muted" id="batNote">Alternative: <b>start_opera_discord.bat</b></p>
+    <button id="discordHint" class="row" type="button" aria-pressed="true">
+        <span class="label"><b>Hinweis auf Netflix &amp; Co.</b></span>
+        <span class="switch" aria-hidden="true"></span>
+    </button>
+</details>
+
+<details class="card" id="listsCard">
+    <summary><h2>Filterlisten</h2><span class="pill" id="listsPill"></span></summary>
     <div id="lists"></div>
-</section>
+</details>
 
 <div class="error small hidden" id="error"></div>
 <footer>AdBlock Browser GX · Erweiterung</footer>
+<script src="gpu.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

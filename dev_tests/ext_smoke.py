@@ -103,12 +103,16 @@ class Target:
 
 
 class Browser:
-    def __init__(self, exe, fresh):
+    def __init__(self, exe, fresh, headless=True, extra_args=()):
         if fresh and os.path.exists(PROFILE):
             shutil.rmtree(PROFILE)
         os.makedirs(PROFILE, exist_ok=True)
+        # some players refuse headless browsers: then a real window, off-screen and without focus
+        mode = ["--headless=new"] if headless else [
+            "--window-position=-32000,-32000", "--window-size=1280,800", "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows", "--disable-features=CalculateNativeWinOcclusion"]
         self.proc = subprocess.Popen([
-            exe, "--headless=new", f"--user-data-dir={PROFILE}", f"--load-extension={EXT}",
+            exe, *mode, *extra_args, f"--user-data-dir={PROFILE}", f"--load-extension={EXT}",
             f"--remote-debugging-port={PORT}", "--no-first-run", "--no-default-browser-check",
             "--mute-audio", "--autoplay-policy=no-user-gesture-required",
             f"--host-resolver-rules=MAP {TEST_HOST} 127.0.0.1", "about:blank"])
@@ -214,7 +218,7 @@ def main():
     # ---- registration and rule sets ----
     scripts = sw.eval("chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id + ':' + x.world))")
     check("Scripts registriert", set(scripts) == {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN",
-                                                    "ab-cosmetic:ISOLATED"}, scripts)
+                                                    "ab-cosmetic:ISOLATED", "ab-discord:ISOLATED"}, scripts)
     enabled = sw.eval("chrome.declarativeNetRequest.getEnabledRulesets()")
     meta = json.load(open(os.path.join(EXT, "generated", "rulesets.json"), encoding="utf-8"))
     check("Regelsätze aktiv", set(enabled) == {r["id"] for r in meta["rulesets"]}, enabled)
@@ -316,8 +320,9 @@ def main():
     # ---- protection off ----
     sw.eval("saveSettings({enabled: false})")
     off = sw.eval("Promise.all([chrome.scripting.getRegisteredContentScripts(), chrome.declarativeNetRequest.getEnabledRulesets()])"
-                  ".then(([s, r]) => ({scripts: s.length, rulesets: r.length}))")
-    check("Schutz aus: keine Scripts, keine Regelsätze", off == {"scripts": 0, "rulesets": 0}, off)
+                  ".then(([s, r]) => ({scripts: s.map(x => x.id), rulesets: r.length}))")
+    check("Schutz aus: keine Blocker-Scripts, keine Regelsätze (Discord-Hinweis bleibt)",
+          off == {"scripts": ["ab-discord"], "rulesets": 0}, off)
     sw.eval("saveSettings({enabled: true, whitelist: ['example.com']})")
 
     # ---- what chrome://extensions shows (warnings of the rule sets, errors) ----
@@ -340,9 +345,10 @@ def main():
     time.sleep(2)
     state = sw.eval("Promise.all([getSettings(), chrome.scripting.getRegisteredContentScripts(), "
                     "chrome.declarativeNetRequest.getEnabledRulesets()]).then(([s, c, r]) => "
-                    "({enabled: s.enabled, whitelist: s.whitelist, scripts: c.length, exclude: (c[0] || {}).excludeMatches, rulesets: r.length}))")
+                    "({enabled: s.enabled, whitelist: s.whitelist, scripts: c.length, "
+                    "exclude: (c.find(x => x.id === 'ab-twitch') || {}).excludeMatches, rulesets: r.length}))")
     check("Neustart: Einstellungen und Registrierungen bleiben",
-          state["enabled"] and state["whitelist"] == ["example.com"] and state["scripts"] >= 3
+          state["enabled"] and state["whitelist"] == ["example.com"] and state["scripts"] == 5
           and state["exclude"] == ["*://*.example.com/*"] and state["rulesets"] == len(meta["rulesets"]), state)
     sw.eval("saveSettings({whitelist: []})")
     sw.close()

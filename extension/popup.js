@@ -1,5 +1,5 @@
 // AdBlock GX popup: protection on/off, exception for the current site, blocked count, status of
-// the YouTube/Twitch/Netflix scripts, filter lists. Settings live in background.js
+// the YouTube/Twitch/Netflix scripts, Discord stream mode, filter lists. Settings live in background.js
 // (chrome.storage.local); every change goes through it.
 'use strict';
 
@@ -45,11 +45,56 @@ function render() {
     setSwitch(exception, state.whitelisted);
 
     renderLists();
+    renderDiscord();
 }
+
+// ---- Discord stream mode: hardware acceleration has to be switched off in the browser ----
+const gpu = abGpuInfo();
+
+function renderDiscord() {
+    const card = $('discordCard');
+    const pill = $('gpuPill');
+    pill.textContent = gpu.accelerated ? 'Grafikkarte an' : 'Stream-Modus aktiv';
+    pill.className = 'pill ' + (gpu.accelerated ? 'hot' : 'ok');
+    $('gpuText').textContent = gpu.accelerated
+        ? 'Netflix & Co. bleiben im Discord-Stream schwarz.'
+        : 'Hardware-Beschleunigung ist aus: Netflix & Co. sind im Discord-Stream sichtbar.';
+    const button = $('gpuSettings');
+    button.textContent = gpu.accelerated ? 'Hardware-Beschleunigung aus' : 'Hardware-Beschleunigung wieder einschalten';
+    button.classList.toggle('calm', !gpu.accelerated);
+    const steps = gpu.accelerated
+        ? ['„Grafikbeschleunigung verwenden“ aus, dann „Neu starten“',
+           'Danach wieder einschalten (sonst ohne Grafikkarte)']
+        : ['„Grafikbeschleunigung verwenden“ an, dann „Neu starten“'];
+    const list = $('gpuSteps');
+    list.textContent = '';
+    steps.forEach(function (s) { list.appendChild(el('li', null, s)); });
+    setSwitch($('discordHint'), state.discordHint);
+    $('batNote').classList.toggle('hidden', !gpu.accelerated);
+    // on Netflix & Co. the section is open and highlighted
+    if (state.streaming && !card.dataset.opened) {
+        card.open = true;
+        card.dataset.opened = '1';
+    }
+    card.classList.toggle('highlight', state.streaming && gpu.accelerated);
+}
+
+$('gpuSettings').addEventListener('click', function () {
+    send({type: 'open-gpu-settings'}).then(function () { window.close(); }).catch(showError);
+});
+
+$('discordHint').addEventListener('click', function () {
+    send({type: 'set-discord-hint', enabled: !state.discordHint}).then(function (s) {
+        state = s;
+        render();
+    }).catch(showError);
+});
 
 function renderLists() {
     const box = $('lists');
     box.textContent = '';
+    const active = state.rulesets.filter(function (r) { return state.enabled && r.active; }).length;
+    $('listsPill').textContent = active + ' von ' + state.rulesets.length + ' aktiv';
     state.rulesets.forEach(function (r) {
         const always = r.mode === 'always';
         const row = el('button', 'row');
@@ -85,7 +130,7 @@ function times(n, what) {
 function describeSite(s) {
     const lines = [];
     if (s.yt) {
-        lines.push(['YouTube', s.yt.pruned ? times(s.yt.pruned, 'Werbedaten entfernt') : 'aktiv, noch keine Werbedaten gesehen']);
+        lines.push(['YouTube', s.yt.pruned ? times(s.yt.pruned, 'Werbedaten entfernt') : 'aktiv, noch keine Werbung']);
         if (s.yt.skipped) lines.push(['YouTube', times(s.yt.skipped, 'durchgerutschte Werbung übersprungen')]);
         if (s.yt.dialogs) lines.push(['YouTube', times(s.yt.dialogs, 'Adblock-Hinweis entfernt')]);
     }
@@ -99,7 +144,7 @@ function describeSite(s) {
     }
     if (s.nf) {
         lines.push(['Netflix', s.nf.breaksRemoved ? number(s.nf.breaksRemoved) + ' Werbepause(n) entfernt'
-                                                  : 'aktiv, noch keine Werbepausen gesehen']);
+                                                  : 'aktiv, noch keine Werbepause']);
         if (s.nf.pauseAdsRemoved) lines.push(['Netflix', times(s.nf.pauseAdsRemoved, 'Pausen-Werbung entfernt')]);
         if (s.nf.adsShown) lines.push(['Netflix', times(s.nf.adsShown, 'Werbung abgedeckt')]);
         if (s.nf.pruning === false) lines.push(['Netflix', 'Absicherung: dieser Titel läuft ohne Entfernen']);
