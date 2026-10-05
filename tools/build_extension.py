@@ -1,5 +1,7 @@
 """
-Builds the browser extension in extension/ from the desktop browser's sources:
+Builds the browser extension in extension/ from the sources of the desktop browser
+"AdBlock Browser GX" (github.com/abilas-sivarajah/adblock-browser-gx) - its scripts/*.js stay the
+only source of the site scripts:
 
   generated/twitch.js, youtube.js, netflix.js   scripts/*.js via site_scripts.build_site_scripts()
   generated/rules_<list>.json                   filter lists (filter_engine.DEFAULT_FILTER_SOURCES)
@@ -12,15 +14,20 @@ and keeps the rule sets in manifest.json in step. Downloaded lists are cached in
 tools/.cache/filters/ (re-downloaded after 12 h); without internet the cache is used, then the
 desktop browser's copies in browser_data/filters/.
 
-usage: python tools/build_extension.py [--update] [--offline]
+The desktop browser is expected in the folder AdBlockBrowser next to this repository
+(otherwise --browser PATH or the environment variable ADBLOCK_BROWSER_DIR).
+
+usage: python tools/build_extension.py [--update] [--offline] [--browser PATH]
        --update   download the lists even if the cache is fresh
        --offline  never download
 """
 
 import argparse
 import ast
+import importlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -28,10 +35,8 @@ from collections import Counter
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS_DIR)
-sys.path.insert(0, ROOT)
 sys.path.insert(0, TOOLS_DIR)
 
-import site_scripts  # noqa: E402  (desktop browser module: json/os only)
 from abp2dnr import CosmeticCollector, convert_list, validate_rules  # noqa: E402
 
 EXT_DIR = os.path.join(ROOT, "extension")
@@ -39,9 +44,9 @@ GEN_DIR = os.path.join(EXT_DIR, "generated")
 ICON_DIR = os.path.join(EXT_DIR, "icons")
 MANIFEST = os.path.join(EXT_DIR, "manifest.json")
 CACHE_DIR = os.path.join(TOOLS_DIR, ".cache", "filters")
-DESKTOP_FILTERS = os.path.join(ROOT, "browser_data", "filters")
-USER_RULES = os.path.join(DESKTOP_FILTERS, "user_rules.txt")
 CACHE_MAX_AGE = 12 * 3600
+BROWSER_REPO = "https://github.com/abilas-sivarajah/adblock-browser-gx"
+DEFAULT_BROWSER_DIR = os.path.join(os.path.dirname(ROOT), "AdBlockBrowser")
 
 # Chrome limits (developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest, 10/2026)
 GUARANTEED_MINIMUM_STATIC_RULES = 30000
@@ -59,10 +64,36 @@ LIST_SETTINGS = {
 }
 
 
-def filter_sources():
+def find_browser_dir(path=None, required=True):
+    """The desktop browser's checkout: --browser, ADBLOCK_BROWSER_DIR or AdBlockBrowser next to
+    this repository."""
+    path = os.path.abspath(path or os.environ.get("ADBLOCK_BROWSER_DIR") or DEFAULT_BROWSER_DIR)
+    if os.path.exists(os.path.join(path, "site_scripts.py")):
+        return path
+    if not required:
+        return None
+    sys.exit(f"Desktop-Browser nicht gefunden: {path}\n"
+             f"Neben diesem Ordner klonen:  git clone {BROWSER_REPO} AdBlockBrowser\n"
+             "oder den Pfad angeben:       python tools/build_extension.py --browser PFAD")
+
+
+def browser_commit(browser):
+    """Commit of the desktop browser the scripts came from (for rulesets.json and the summary)."""
+    try:
+        def git(*args):
+            return subprocess.run(["git", "-C", browser, *args], capture_output=True, text=True,
+                                  timeout=10).stdout.strip()
+        commit = git("rev-parse", "--short", "HEAD")
+        changed = git("status", "--porcelain", "--", "scripts", "site_scripts.py", "site_fixes.txt", "filter_engine.py")
+        return commit + (" (geändert)" if changed else "") if commit else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def filter_sources(browser):
     """DEFAULT_FILTER_SOURCES from filter_engine.py - read, not imported: the module imports the
     desktop browser's adblock (Rust) engine, which the build does not need."""
-    with open(os.path.join(ROOT, "filter_engine.py"), encoding="utf-8") as f:
+    with open(os.path.join(browser, "filter_engine.py"), encoding="utf-8") as f:
         tree = ast.parse(f.read())
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "DEFAULT_FILTER_SOURCES"
@@ -80,7 +111,7 @@ def read_text(path):
         return f.read()
 
 
-def load_list(src, update, offline):
+def load_list(src, update, offline, browser):
     """(text, where it came from) - text is None if the list is nowhere to be found."""
     path = os.path.join(CACHE_DIR, src["filename"])
     fresh = os.path.exists(path) and time.time() - os.path.getmtime(path) < CACHE_MAX_AGE
@@ -97,7 +128,7 @@ def load_list(src, update, offline):
             print(f"  ! {src['name']}: Download fehlgeschlagen ({e})")
     if os.path.exists(path):
         return read_text(path), "Cache vom " + time.strftime("%d.%m. %H:%M", time.localtime(os.path.getmtime(path)))
-    desktop = os.path.join(DESKTOP_FILTERS, src["filename"])
+    desktop = os.path.join(browser, "browser_data", "filters", src["filename"])
     if os.path.exists(desktop):
         return read_text(desktop), "Kopie des Desktop-Browsers"
     return None, "fehlt"
@@ -114,7 +145,9 @@ def write_json(path, data, one_per_line=False):
         json.load(f)  # must be valid JSON
 
 
-def build_site_scripts():
+def build_site_scripts(browser):
+    sys.path.insert(0, browser)
+    site_scripts = importlib.import_module("site_scripts")  # desktop browser module: json/os only
     twitch, youtube, netflix = site_scripts.build_site_scripts(True, [])[:3]
     for name, code, source in (("twitch.js", twitch, "twitch_main.js + twitch_worker.js"),
                                ("youtube.js", youtube, "youtube.js"), ("netflix.js", netflix, "netflix.js")):
@@ -123,7 +156,7 @@ def build_site_scripts():
     print("Seiten-Scripts: twitch.js, youtube.js, netflix.js")
 
 
-def build_icons():
+def build_icons(browser):
     sizes = (16, 32, 48, 128)
     try:
         from PIL import Image, ImageEnhance
@@ -132,7 +165,7 @@ def build_icons():
         print("Icons: Pillow fehlt - " + ("vorhandene Icons bleiben" if not missing else f"es fehlen {missing}!"))
         return
     os.makedirs(ICON_DIR, exist_ok=True)
-    src = Image.open(os.path.join(ROOT, "assets", "icon.png")).convert("RGBA")
+    src = Image.open(os.path.join(browser, "assets", "icon.png")).convert("RGBA")
     for s in sizes:
         icon = src.resize((s, s), Image.LANCZOS)
         icon.save(os.path.join(ICON_DIR, f"icon{s}.png"), optimize=True)
@@ -159,29 +192,34 @@ def main():
     ap = argparse.ArgumentParser(description="Baut die Browser-Erweiterung (extension/).")
     ap.add_argument("--update", action="store_true", help="Filterlisten neu laden, auch wenn der Cache frisch ist")
     ap.add_argument("--offline", action="store_true", help="nichts herunterladen")
+    ap.add_argument("--browser", help="Ordner des Desktop-Browsers (Standard: AdBlockBrowser neben diesem Repo)")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # consoles that cannot show every character
 
+    browser = find_browser_dir(args.browser)
+    commit = browser_commit(browser)
+    print(f"Desktop-Browser: {browser}" + (f" (Commit {commit})" if commit else ""))
     os.makedirs(GEN_DIR, exist_ok=True)
-    build_site_scripts()
-    build_icons()
+    build_site_scripts(browser)
+    build_icons(browser)
 
     cosmetics = CosmeticCollector()
     lists = []
-    site_fix_text = read_text(os.path.join(ROOT, "site_fixes.txt"))
+    site_fix_text = read_text(os.path.join(browser, "site_fixes.txt"))
     origin = "site_fixes.txt"
-    if os.path.exists(USER_RULES):
-        site_fix_text += "\n" + read_text(USER_RULES)
+    user_rules = os.path.join(browser, "browser_data", "filters", "user_rules.txt")
+    if os.path.exists(user_rules):
+        site_fix_text += "\n" + read_text(user_rules)
         origin += " + user_rules.txt"
     lists.append(("site_fixes", "Seiten-Fixes", "always", site_fix_text, origin, "top"))
 
-    sources = filter_sources()
+    sources = filter_sources(browser)
     ordered = sorted(sources, key=lambda s: LIST_SETTINGS.get(s["filename"], ("", "auto"))[1] != "on")
     print("Filterlisten:")
     for src in ordered:
         rid, mode = LIST_SETTINGS.get(src["filename"], (os.path.splitext(src["filename"])[0], "auto"))
-        text, where = load_list(src, args.update, args.offline)
+        text, where = load_list(src, args.update, args.offline, browser)
         if text is None:
             print(f"  ! {src['name']}: nicht verfügbar - Regelsatz bleibt leer")
             text = ""
@@ -210,7 +248,7 @@ def main():
         else:
             r["manifestEnabled"] = True
     write_json(os.path.join(GEN_DIR, "rulesets.json"),
-               {"guaranteedRules": GUARANTEED_MINIMUM_STATIC_RULES, "rulesets": rulesets})
+               {"guaranteedRules": GUARANTEED_MINIMUM_STATIC_RULES, "browserCommit": commit, "rulesets": rulesets})
     cosmetic_data = cosmetics.to_json()
     write_json(os.path.join(GEN_DIR, "cosmetic.json"), cosmetic_data)
     manifest_changed = sync_manifest(rulesets)

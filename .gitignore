@@ -1,0 +1,9 @@
+# Build-Ausgabe (python tools/build_extension.py) und Filterlisten-Cache
+extension/generated/
+tools/.cache/
+# von Chrome/Opera beim Laden der entpackten Erweiterung angelegt (indizierte Regelsaetze)
+extension/_metadata/
+# Testprofile und Ausgaben der Testskripte
+dev_tests/out/
+__pycache__/
+*.pyc

@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 from abp2dnr import CosmeticCollector, convert_list, regex_cost, validate_rules  # noqa: E402
+from build_extension import find_browser_dir  # noqa: E402
 
 passed = failed = 0
 
@@ -128,10 +129,14 @@ check("#@# without domain removes the generic rule", "global" not in cos["classe
 check("style rule -> CSS with !important", cos["styles"].get("example.com") == [".hdr { top:0 !important }"], cos["styles"])
 
 # ---- validation ----
-res, _ = convert(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "site_fixes.txt"),
-                      encoding="utf-8").read(), domain_scope="top", site_fix=True)
-check("site_fixes.txt converts without errors", res.rules and not validate_rules(res.rules), validate_rules(res.rules))
-check("ids are 1..n", [r["id"] for r in res.rules] == list(range(1, len(res.rules) + 1)))
+browser = find_browser_dir(required=False)
+if browser:  # the desktop browser's site_fixes.txt (AdBlockBrowser next to this repository)
+    res, _ = convert(open(os.path.join(browser, "site_fixes.txt"), encoding="utf-8").read(),
+                     domain_scope="top", site_fix=True)
+    check("site_fixes.txt converts without errors", res.rules and not validate_rules(res.rules), validate_rules(res.rules))
+    check("ids are 1..n", [r["id"] for r in res.rules] == list(range(1, len(res.rules) + 1)))
+else:
+    print("SKIP site_fixes.txt: Desktop-Browser nicht gefunden")
 errs = validate_rules([{"id": 1, "priority": 1, "action": {"type": "block"}, "condition": {"urlFilter": "||*x"}},
                        {"id": 1, "priority": 0, "action": {"type": "redirect"}, "condition": {"resourceTypes": ["popup"]}}])
 check("validation finds broken rules", len(errs) >= 5, errs)

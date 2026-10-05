@@ -223,7 +223,7 @@ details.card > summary {
 }
 
 details.card > summary::-webkit-details-marker { display: none; }
-details.card > summary h2 { flex: 1; margin: 0; }
+details.card > summary h2 { flex: 1; min-width: 0; margin: 0; white-space: nowrap; letter-spacing: .04em; }
 
 details.card > summary::after {
     content: "";

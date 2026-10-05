@@ -91,8 +91,8 @@ def main():
     time.sleep(6)
     e.check("Stream-Modus: kein Banner", not banner(nf))
     pop, pop_id, s = popup_state(br, sw, e.tab_id(sw, "netflix.com"))
-    e.check("Popup: 'Stream-Modus aktiv'", s["pill"] == "Stream-Modus aktiv"
-            and s["button"] == "Hardware-Beschleunigung wieder einschalten", s)
+    e.check("Popup: 'Stream-Modus an'", s["pill"] == "Stream-Modus an"
+            and s["button"] == "Beschleunigung wieder einschalten", s)
     for t in (nf, pop, sw):
         t.close()
     br.quit()

@@ -54,13 +54,13 @@ const gpu = abGpuInfo();
 function renderDiscord() {
     const card = $('discordCard');
     const pill = $('gpuPill');
-    pill.textContent = gpu.accelerated ? 'Grafikkarte an' : 'Stream-Modus aktiv';
+    pill.textContent = gpu.accelerated ? 'Grafikkarte an' : 'Stream-Modus an';
     pill.className = 'pill ' + (gpu.accelerated ? 'hot' : 'ok');
     $('gpuText').textContent = gpu.accelerated
         ? 'Netflix & Co. bleiben im Discord-Stream schwarz.'
         : 'Hardware-Beschleunigung ist aus: Netflix & Co. sind im Discord-Stream sichtbar.';
     const button = $('gpuSettings');
-    button.textContent = gpu.accelerated ? 'Hardware-Beschleunigung aus' : 'Hardware-Beschleunigung wieder einschalten';
+    button.textContent = gpu.accelerated ? 'Hardware-Beschleunigung aus' : 'Beschleunigung wieder einschalten';
     button.classList.toggle('calm', !gpu.accelerated);
     const steps = gpu.accelerated
         ? ['„Grafikbeschleunigung verwenden“ aus, dann „Neu starten“',
