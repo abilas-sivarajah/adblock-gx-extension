@@ -196,7 +196,7 @@ def main():
         path = f"generated/rules_{rid}.json"
         write_json(os.path.join(EXT_DIR, path), res.rules, one_per_line=True)
         rulesets.append({"id": rid, "name": name, "path": path, "rules": len(res.rules),
-                         "regex": res.regex_rules, "mode": mode})
+                         "filters": res.filters, "regex": res.regex_rules, "mode": mode})
         summary.append((rid, name, where, res))
 
     # what is enabled from the start: "always"/"on", "auto" only within the guaranteed minimum

@@ -293,7 +293,7 @@ async function tabState(tabId) {
         whitelisted: isWhitelisted(host, settings.whitelist),
         blocked: /^\d+\+?$/.test(badge) ? badge : '0',
         rulesets: info.rulesets.map(function (r) {
-            return {id: r.id, name: r.name, rules: r.rules, mode: r.mode,
+            return {id: r.id, name: r.name, rules: r.rules, filters: r.filters, mode: r.mode,
                     wanted: rulesetWanted(r, settings), active: enabledNow.has(r.id)};
         }),
     };
@@ -328,11 +328,11 @@ async function onPopupMessage(msg) {
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg || typeof msg.type !== 'string' || sender.id !== chrome.runtime.id) return false;
     const fail = function (e) { sendResponse({error: String(e && e.message || e)}); };
-    if (sender.tab) {  // content scripts
+    if ((sender.url || '').startsWith(chrome.runtime.getURL(''))) {  // popup (also when opened as a tab)
+        onPopupMessage(msg).then(sendResponse, fail);
+    } else {                                                          // content scripts
         if (msg.type !== 'cosmetic-init' && msg.type !== 'cosmetic-classes') return false;
         onCosmeticMessage(msg, sender).then(sendResponse, fail);
-    } else {           // popup
-        onPopupMessage(msg).then(sendResponse, fail);
     }
     return true;
 });

@@ -20,13 +20,27 @@
 </button>
 
 <section class="card" id="siteCard">
-    <h2>Diese Seite</h2>
-    <div class="site" id="site">–</div>
+    <div class="site-head">
+        <div class="site-name">
+            <h2>Diese Seite</h2>
+            <div class="site" id="site">–</div>
+        </div>
+        <div class="stat" title="Von Chrome gezählte blockierte Anfragen auf diesem Tab">
+            <span class="num" id="blocked">0</span>
+            <span class="what">blockiert</span>
+        </div>
+    </div>
+    <ul class="status hidden" id="siteStatus"></ul>
     <button id="exception" class="row" type="button" aria-pressed="false">
-        <span class="label"><b>Ausnahme</b><small>hier nichts blockieren</small></span>
+        <span class="label"><b>Ausnahme</b><small>auf dieser Seite nichts blockieren</small></span>
         <span class="switch off" aria-hidden="true"></span>
     </button>
     <div class="note hidden" id="reloadNote">Seite wird neu geladen …</div>
+</section>
+
+<section class="card" id="listsCard">
+    <h2>Filterlisten</h2>
+    <div id="lists"></div>
 </section>
 
 <div class="error small hidden" id="error"></div>

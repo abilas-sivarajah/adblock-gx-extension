@@ -571,6 +571,7 @@ class ListResult:
         self.stats = Counter()         # what happened to the lines (for the summary)
         self.regex_rules = 0
         self.merged_hosts = 0          # plain domain filters folded into requestDomains rules
+        self.filters = 0               # network filters that went into the rules
 
 
 def convert_list(text: str, cosmetics: CosmeticCollector, domain_scope: str = "initiator",
@@ -598,6 +599,7 @@ def convert_list(text: str, cosmetics: CosmeticCollector, domain_scope: str = "i
             cosmetics.add_host_option(f, stats)
         if not has_network_part(f):
             continue
+        res.filters += 1
         rule = network_rule(f, domain_scope, site_fix)
         if f.regex is not None:
             res.regex_rules += 1

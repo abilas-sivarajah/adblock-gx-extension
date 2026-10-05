@@ -229,6 +229,16 @@ def main():
     time.sleep(8)
     check("YouTube: Script läuft (window.__abYouTube)", yt.eval("JSON.stringify(window.__abYouTube || null)") != "null",
           yt.eval("JSON.stringify(window.__abYouTube || null)"))
+    yt_tab = tab_id(sw, "youtube.com")
+    ext_id = sw.eval("chrome.runtime.id")
+    pop, pop_id = br.open(f"chrome-extension://{ext_id}/popup.html?tab={yt_tab}")
+    time.sleep(2)
+    p = pop.eval("({site: document.getElementById('site').textContent, error: document.getElementById('error').textContent, "
+                 "status: document.getElementById('siteStatus').innerText, lists: document.querySelectorAll('#lists .row').length})")
+    check("Popup: Seite, YouTube-Status, Filterlisten", p["site"] == "youtube.com" and not p["error"]
+          and "werbedaten entfernt" in p["status"].lower() and p["lists"] == len(meta["rulesets"]), p)
+    pop.close()
+    br.close_page(pop_id)
     nf, nf_id = br.open("https://www.netflix.com/")
     time.sleep(5)
     check("Netflix: Script läuft (window.__abNetflix)", nf.eval("!!window.__abNetflix"))
