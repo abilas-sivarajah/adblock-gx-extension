@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>AdBlock GX</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+    <img src="icons/icon32.png" alt="">
+    <h1>AdBlock <span>GX</span></h1>
+</header>
+
+<button id="power" class="power card" type="button" aria-pressed="true">
+    <span class="label">
+        <span class="title" id="powerTitle">Schutz an</span>
+        <span class="sub" id="powerSub">Werbung und Tracker werden blockiert</span>
+    </span>
+    <span class="switch" aria-hidden="true"></span>
+</button>
+
+<section class="card" id="siteCard">
+    <h2>Diese Seite</h2>
+    <div class="site" id="site">–</div>
+    <button id="exception" class="row" type="button" aria-pressed="false">
+        <span class="label"><b>Ausnahme</b><small>hier nichts blockieren</small></span>
+        <span class="switch off" aria-hidden="true"></span>
+    </button>
+    <div class="note hidden" id="reloadNote">Seite wird neu geladen …</div>
+</section>
+
+<div class="error small hidden" id="error"></div>
+<footer>AdBlock Browser GX · Erweiterung</footer>
+<script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "AdBlock GX",
+  "version": "1.0.0",
+  "description": "Werbeblocker im GX-Look: EasyList & Co., Werbeflächen ausblenden, YouTube, Twitch und Netflix ohne Video-Werbung.",
+  "minimum_chrome_version": "145",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "AdBlock GX",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "site_fixes",
+        "enabled": true,
+        "path": "generated/rules_site_fixes.json"
+      },
+      {
+        "id": "easylist",
+        "enabled": true,
+        "path": "generated/rules_easylist.json"
+      },
+      {
+        "id": "easylist_germany",
+        "enabled": true,
+        "path": "generated/rules_easylist_germany.json"
+      },
+      {
+        "id": "peter_lowe",
+        "enabled": true,
+        "path": "generated/rules_peter_lowe.json"
+      },
+      {
+        "id": "easyprivacy",
+        "enabled": true,
+        "path": "generated/rules_easyprivacy.json"
+      }
+    ]
+  }
+}

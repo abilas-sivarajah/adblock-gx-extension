@@ -1,0 +1,241 @@
+"""Smoke test of the browser extension (extension/) in an invisible Opera GX / Chrome.
+
+Starts the browser headless with a fresh test profile (dev_tests/out/ext_profile), loads the
+unpacked extension and checks it over the DevTools protocol: registered scripts, rule sets, regex
+rules, YouTube/Twitch/Netflix scripts, blocking on a news site, element hiding, exception list,
+"protection off" and a restart. Your normal browser profile is not touched.
+
+usage: python dev_tests/ext_smoke.py [--browser PATH] [--keep]
+       --browser  browser exe (default: Opera GX). Chrome stable ignores --load-extension.
+       --keep     leave the browser running at the end (port 9444)
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+from websockets.sync.client import connect
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+EXT = os.path.join(ROOT, "extension")
+PROFILE = os.path.join(HERE, "out", "ext_profile")
+PORT = 9444
+OPERA_GX = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera GX\opera.exe")
+
+passed = failed = 0
+
+
+def check(name, ok, detail=""):
+    global passed, failed
+    if ok:
+        passed += 1
+    else:
+        failed += 1
+    print(("PASS " if ok else "FAIL ") + name + (f"  [{detail}]" if detail else ""), flush=True)
+
+
+class Target:
+    """One DevTools target (page or service worker)."""
+
+    def __init__(self, ws_url):
+        self.ws = connect(ws_url, max_size=None, open_timeout=10)
+        self.i = 0
+
+    def call(self, method, **params):
+        self.i += 1
+        my = self.i
+        self.ws.send(json.dumps({"id": my, "method": method, "params": params}))
+        while True:
+            msg = json.loads(self.ws.recv(timeout=90))
+            if msg.get("id") == my:
+                if "error" in msg:
+                    raise RuntimeError(msg["error"])
+                return msg["result"]
+
+    def eval(self, expression):
+        r = self.call("Runtime.evaluate", expression=expression, awaitPromise=True, returnByValue=True)
+        if "exceptionDetails" in r:
+            raise RuntimeError(json.dumps(r["exceptionDetails"])[:600])
+        return r["result"].get("value")
+
+    def close(self):
+        self.ws.close()
+
+
+class Browser:
+    def __init__(self, exe, fresh):
+        if fresh and os.path.exists(PROFILE):
+            shutil.rmtree(PROFILE)
+        os.makedirs(PROFILE, exist_ok=True)
+        self.proc = subprocess.Popen([
+            exe, "--headless=new", f"--user-data-dir={PROFILE}", f"--load-extension={EXT}",
+            f"--remote-debugging-port={PORT}", "--no-first-run", "--no-default-browser-check",
+            "--mute-audio", "--autoplay-policy=no-user-gesture-required", "about:blank"])
+        for _ in range(60):
+            try:
+                self.version = self.http("/json/version")
+                break
+            except OSError:
+                time.sleep(0.5)
+        else:
+            raise SystemExit("Browser startet nicht")
+
+    def http(self, path, method="GET"):
+        req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", method=method)
+        return json.load(urllib.request.urlopen(req, timeout=10))
+
+    def worker(self):
+        """The extension's service worker (started on demand)."""
+        for _ in range(40):
+            for t in self.http("/json/list"):
+                if t["type"] == "service_worker" and t["url"].startswith("chrome-extension://") \
+                        and t["url"].endswith("/background.js"):
+                    sw = Target(t["webSocketDebuggerUrl"])
+                    try:
+                        if sw.eval("chrome.runtime.getManifest().name") == "AdBlock GX":
+                            return sw
+                    except RuntimeError:
+                        pass
+                    sw.close()
+            time.sleep(0.5)
+        raise SystemExit("Service Worker der Erweiterung nicht gefunden")
+
+    def open(self, url):
+        t = self.http("/json/new?" + urllib.parse.quote(url, safe=":/?=&"), method="PUT")
+        return Target(t["webSocketDebuggerUrl"]), t["id"]
+
+    def close_page(self, target_id):
+        try:
+            self.http(f"/json/close/{target_id}")
+        except Exception:
+            pass
+
+    def quit(self):
+        try:
+            b = Target(self.version["webSocketDebuggerUrl"])
+            b.call("Browser.close")
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+def tab_id(sw, host):
+    return sw.eval(f"chrome.tabs.query({{}}).then(ts => (ts.find(t => (t.url || '').includes({json.dumps(host)})) || {{}}).id)")
+
+
+def matched_since(sw, tid, since_ms):
+    return sw.eval(f"chrome.declarativeNetRequest.getMatchedRules({{tabId: {tid}, minTimeStamp: {since_ms}}})"
+                   ".then(r => r.rulesMatchedInfo.length)")
+
+
+def regex_rules():
+    out = []
+    for name in os.listdir(os.path.join(EXT, "generated")):
+        if name.startswith("rules_"):
+            with open(os.path.join(EXT, "generated", name), encoding="utf-8") as f:
+                for r in json.load(f):
+                    if "regexFilter" in r["condition"]:
+                        out.append((name, r["id"], r["condition"]["regexFilter"]))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--browser", default=OPERA_GX)
+    ap.add_argument("--keep", action="store_true")
+    args = ap.parse_args()
+
+    br = Browser(args.browser, fresh=True)
+    print("Browser:", br.version.get("Browser"), br.version.get("User-Agent", "").split(") ")[-1])
+    sw = br.worker()
+    time.sleep(2)  # onInstalled -> sync
+
+    # ---- registration and rule sets ----
+    scripts = sw.eval("chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id + ':' + x.world))")
+    check("Seiten-Scripts registriert", {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN"} <= set(scripts), scripts)
+    enabled = sw.eval("chrome.declarativeNetRequest.getEnabledRulesets()")
+    meta = json.load(open(os.path.join(EXT, "generated", "rulesets.json"), encoding="utf-8"))
+    check("Regelsätze aktiv", set(enabled) == {r["id"] for r in meta["rulesets"]}, enabled)
+    regex = regex_rules()
+    results = sw.eval("Promise.all(%s.map(r => chrome.declarativeNetRequest.isRegexSupported({regex: r})))"
+                      % json.dumps([r[2] for r in regex]))
+    bad = [f"{n}#{i}: {res.get('reason')} {rx[:60]}" for (n, i, rx), res in zip(regex, results) if not res["isSupported"]]
+    check(f"Regex-Regeln von Chrome akzeptiert ({len(regex) - len(bad)}/{len(regex)})", not bad, "; ".join(bad)[:800])
+
+    # ---- site scripts ----
+    yt, yt_id = br.open("https://www.youtube.com/")
+    time.sleep(8)
+    check("YouTube: Script läuft (window.__abYouTube)", yt.eval("JSON.stringify(window.__abYouTube || null)") != "null",
+          yt.eval("JSON.stringify(window.__abYouTube || null)"))
+    nf, nf_id = br.open("https://www.netflix.com/")
+    time.sleep(5)
+    check("Netflix: Script läuft (window.__abNetflix)", nf.eval("!!window.__abNetflix"))
+    br.close_page(nf_id)
+    tw, tw_id = br.open("https://www.twitch.tv/")
+    stats = None
+    for _ in range(25):
+        time.sleep(1)
+        stats = tw.eval("window.__abTwitch ? {workers: __abTwitch.workers, hooked: __abTwitch.hookedWorkers, "
+                        "masters: __abTwitch.masters, playlists: __abTwitch.playlists, errors: __abTwitch.errors} : null")
+        if stats and stats["hooked"] and stats["playlists"]:
+            break
+    check("Twitch: Video-Worker eingehängt (hookedWorkers, playlists)", bool(stats and stats["hooked"] and stats["playlists"]), stats)
+    br.close_page(tw_id)
+
+    # ---- network blocking ----
+    news, news_id = br.open("https://www.spiegel.de/")
+    time.sleep(8)
+    tid = tab_id(sw, "spiegel.de")
+    n_blocked = matched_since(sw, tid, 0)
+    badge = sw.eval(f"chrome.action.getBadgeText({{tabId: {tid}}})")
+    check("spiegel.de: Anfragen blockiert", n_blocked > 0, f"{n_blocked} Treffer, Badge {badge!r}")
+
+    # ---- exception list ----
+    sw.eval("saveSettings({whitelist: ['spiegel.de', 'youtube.com']})")
+    since = int(time.time() * 1000)
+    news.call("Page.reload")
+    yt.call("Page.reload")
+    time.sleep(8)
+    check("Ausnahme spiegel.de: nichts blockiert", matched_since(sw, tid, since) == 0, matched_since(sw, tid, since))
+    check("Ausnahme youtube.com: Script läuft nicht", yt.eval("!!window.__abYouTube") is False)
+    sw.eval("saveSettings({whitelist: []})")
+
+    # ---- protection off ----
+    sw.eval("saveSettings({enabled: false})")
+    off = sw.eval("Promise.all([chrome.scripting.getRegisteredContentScripts(), chrome.declarativeNetRequest.getEnabledRulesets()])"
+                  ".then(([s, r]) => ({scripts: s.length, rulesets: r.length}))")
+    check("Schutz aus: keine Scripts, keine Regelsätze", off == {"scripts": 0, "rulesets": 0}, off)
+    sw.eval("saveSettings({enabled: true, whitelist: ['example.com']})")
+    for t in (news, yt, sw):
+        t.close()
+    br.quit()
+
+    # ---- restart: settings and registrations survive ----
+    br = Browser(args.browser, fresh=False)
+    sw = br.worker()
+    time.sleep(2)
+    state = sw.eval("Promise.all([getSettings(), chrome.scripting.getRegisteredContentScripts(), "
+                    "chrome.declarativeNetRequest.getEnabledRulesets()]).then(([s, c, r]) => "
+                    "({enabled: s.enabled, whitelist: s.whitelist, scripts: c.length, exclude: (c[0] || {}).excludeMatches, rulesets: r.length}))")
+    check("Neustart: Einstellungen und Registrierungen bleiben",
+          state["enabled"] and state["whitelist"] == ["example.com"] and state["scripts"] >= 3
+          and state["exclude"] == ["*://*.example.com/*"] and state["rulesets"] == len(meta["rulesets"]), state)
+    sw.eval("saveSettings({whitelist: []})")
+    sw.close()
+    if not args.keep:
+        br.quit()
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()
