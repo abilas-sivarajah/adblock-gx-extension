@@ -5,6 +5,9 @@
 //   always run with {enabled: true, whitelist: []}.
 // - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
 //   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
+// - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
+//   generated/cosmetic.json are inserted with scripting.insertCSS as user styles (one rule per
+//   selector, like build_cosmetic_css() of the desktop browser) - the page's CSP cannot stop them.
 'use strict';
 
 const DEFAULT_SETTINGS = {
@@ -67,11 +70,13 @@ function excludePattern(domain) {
 function wantedContentScripts(settings) {
     if (!settings.enabled) return [];
     const exclude = settings.whitelist.map(excludePattern);
-    return SITE_SCRIPTS.map(function (s) {
-        const script = {id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true};
-        if (exclude.length) script.excludeMatches = exclude;
-        return script;
+    const scripts = SITE_SCRIPTS.map(function (s) {
+        return {id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true};
     });
+    scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
+                  world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
+    scripts.forEach(function (s) { if (exclude.length) s.excludeMatches = exclude; });
+    return scripts;
 }
 
 // compare registrations by what matters (Chrome fills in defaults when reading them back)
@@ -143,6 +148,97 @@ async function syncWhitelistRules(settings) {
             condition: {requestDomains: domains, resourceTypes: ['main_frame', 'sub_frame']},
         }] : [],
     });
+}
+
+// ---- element hiding ----
+let cosmeticData = null;            // loaded once per service worker start
+const cosmeticContexts = new Map(); // host -> rules for it (small cache)
+
+function getCosmetics() {
+    if (!cosmeticData) {
+        cosmeticData = fetch(chrome.runtime.getURL('generated/cosmetic.json')).then(function (r) { return r.json(); })
+            .then(function (d) {
+                const map = function (o) { return new Map(Object.entries(o)); };
+                return {specific: map(d.specific), styles: map(d.styles), exceptions: map(d.exceptions),
+                        classes: map(d.classes), ids: map(d.ids), generic: d.generic,
+                        generichide: new Set(d.generichide), elemhide: new Set(d.elemhide)};
+            });
+        cosmeticData.catch(function () { cosmeticData = null; });
+    }
+    return cosmeticData;
+}
+
+// keys a host's rules can be stored under: the host, its parent domains and entity forms
+// ("google.*" for google.de / google.co.uk)
+function hostKeys(host) {
+    const labels = host.split('.');
+    const keys = [];
+    for (let i = 0; i < labels.length; i++) {
+        const rest = labels.slice(i);
+        keys.push(rest.join('.'));
+        for (let cut = 1; cut <= 2 && cut < rest.length; cut++) keys.push(rest.slice(0, rest.length - cut).join('.') + '.*');
+    }
+    return keys;
+}
+
+function cosmeticContext(data, host) {
+    let ctx = cosmeticContexts.get(host);
+    if (ctx) return ctx;
+    const keys = hostKeys(host);
+    ctx = {elemhide: false, generichide: false, exceptions: new Set(), specific: [], styles: []};
+    keys.forEach(function (k) {
+        if (data.elemhide.has(k)) ctx.elemhide = true;
+        if (data.generichide.has(k)) ctx.generichide = true;
+        (data.exceptions.get(k) || []).forEach(function (s) { ctx.exceptions.add(s); });
+    });
+    const specific = new Set();
+    keys.forEach(function (k) {
+        (data.specific.get(k) || []).forEach(function (s) { if (!ctx.exceptions.has(s)) specific.add(s); });
+        ctx.styles.push.apply(ctx.styles, data.styles.get(k) || []);
+    });
+    ctx.specific = Array.from(specific);
+    if (cosmeticContexts.size > 200) cosmeticContexts.clear();
+    cosmeticContexts.set(host, ctx);
+    return ctx;
+}
+
+function hideCss(selectors) {
+    // one rule per selector: a selector the browser does not understand only drops itself
+    return selectors.map(function (s) { return s + ' { display: none !important; }'; }).join('\n');
+}
+
+async function onCosmeticMessage(msg, sender) {
+    const tab = sender.tab;
+    if (!tab || tab.id < 0) return {active: false};
+    const settings = await getSettings();
+    // about:blank frames report their creator's origin
+    const frameHost = hostOf(sender.url || '') || hostOf(sender.origin || '');
+    if (!settings.enabled || !frameHost || isWhitelisted(frameHost, settings.whitelist) ||
+        isWhitelisted(hostOf(tab.url || ''), settings.whitelist)) return {active: false};
+    const data = await getCosmetics();
+    const ctx = cosmeticContext(data, frameHost);
+    if (ctx.elemhide) return {active: false};
+
+    const selectors = [];
+    const add = function (list) {
+        (list || []).forEach(function (s) { if (!ctx.exceptions.has(s)) selectors.push(s); });
+    };
+    let css = '';
+    if (msg.type === 'cosmetic-init') {
+        selectors.push.apply(selectors, ctx.specific);
+        if (!ctx.generichide) add(data.generic);
+        css = ctx.styles.join('\n');
+    } else if (!ctx.generichide) {
+        (msg.classes || []).forEach(function (c) { if (typeof c === 'string') add(data.classes.get(c)); });
+        (msg.ids || []).forEach(function (i) { if (typeof i === 'string') add(data.ids.get(i)); });
+    }
+    if (selectors.length) css = hideCss(selectors) + (css ? '\n' + css : '');
+    if (css) {
+        const target = {tabId: tab.id};
+        if (sender.documentId) target.documentIds = [sender.documentId]; else target.frameIds = [sender.frameId];
+        await chrome.scripting.insertCSS({target: target, css: css, origin: 'USER'}).catch(function () {});
+    }
+    return {active: !ctx.generichide};
 }
 
 // ---- toolbar button ----
@@ -230,8 +326,13 @@ async function onPopupMessage(msg) {
 }
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-    if (!msg || typeof msg.type !== 'string') return false;
-    if (sender.id !== chrome.runtime.id || sender.tab) return false;  // popup only
-    onPopupMessage(msg).then(sendResponse, function (e) { sendResponse({error: String(e && e.message || e)}); });
+    if (!msg || typeof msg.type !== 'string' || sender.id !== chrome.runtime.id) return false;
+    const fail = function (e) { sendResponse({error: String(e && e.message || e)}); };
+    if (sender.tab) {  // content scripts
+        if (msg.type !== 'cosmetic-init' && msg.type !== 'cosmetic-classes') return false;
+        onCosmeticMessage(msg, sender).then(sendResponse, fail);
+    } else {           // popup
+        onPopupMessage(msg).then(sendResponse, fail);
+    }
     return true;
 });

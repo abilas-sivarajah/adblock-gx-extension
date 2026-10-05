@@ -10,11 +10,13 @@ usage: python dev_tests/ext_smoke.py [--browser PATH] [--keep]
        --keep     leave the browser running at the end (port 9444)
 """
 import argparse
+import http.server
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -27,6 +29,38 @@ EXT = os.path.join(ROOT, "extension")
 PROFILE = os.path.join(HERE, "out", "ext_profile")
 PORT = 9444
 OPERA_GX = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera GX\opera.exe")
+# test page for element hiding: a name of its own (EasyList switches generic rules off on
+# 127.0.0.1/localhost), mapped to the local server in the test browser only
+TEST_HOST = "adtest.example"
+TEST_PAGE = b"""<!doctype html><meta charset="utf-8"><title>Werbe-Test</title>
+<div id="google_ads">Werbung (id)</div>
+<div class="advertisement leaderboard">Werbung (Klasse)</div>
+<div id="div-gpt-ad-123">Werbung (generisch, [id^=])</div>
+<div id="content">Inhalt</div>
+<script>setTimeout(function () {
+  var d = document.createElement('div'); d.id = 'late'; d.className = 'ad_box'; d.textContent = 'Werbung (nachgeladen)';
+  document.body.appendChild(d);
+}, 800);</script>
+"""
+
+
+class TestPage(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        # strict CSP: page styles are forbidden - the extension's user styles must still work
+        self.send_header("Content-Security-Policy", "style-src 'none'; script-src 'unsafe-inline'")
+        self.end_headers()
+        self.wfile.write(TEST_PAGE)
+
+    def log_message(self, *args):
+        pass
+
+
+def start_test_server():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TestPage)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server.server_address[1]
 
 passed = failed = 0
 
@@ -76,7 +110,8 @@ class Browser:
         self.proc = subprocess.Popen([
             exe, "--headless=new", f"--user-data-dir={PROFILE}", f"--load-extension={EXT}",
             f"--remote-debugging-port={PORT}", "--no-first-run", "--no-default-browser-check",
-            "--mute-audio", "--autoplay-policy=no-user-gesture-required", "about:blank"])
+            "--mute-audio", "--autoplay-policy=no-user-gesture-required",
+            f"--host-resolver-rules=MAP {TEST_HOST} 127.0.0.1", "about:blank"])
         for _ in range(60):
             try:
                 self.version = self.http("/json/version")
@@ -178,7 +213,8 @@ def main():
 
     # ---- registration and rule sets ----
     scripts = sw.eval("chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id + ':' + x.world))")
-    check("Seiten-Scripts registriert", {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN"} <= set(scripts), scripts)
+    check("Scripts registriert", set(scripts) == {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN",
+                                                    "ab-cosmetic:ISOLATED"}, scripts)
     enabled = sw.eval("chrome.declarativeNetRequest.getEnabledRulesets()")
     meta = json.load(open(os.path.join(EXT, "generated", "rulesets.json"), encoding="utf-8"))
     check("Regelsätze aktiv", set(enabled) == {r["id"] for r in meta["rulesets"]}, enabled)
@@ -215,6 +251,31 @@ def main():
     n_blocked = blocked_since(sw, tid, 0)
     badge = sw.eval(f"chrome.action.getBadgeText({{tabId: {tid}}})")
     check("spiegel.de: Anfragen blockiert", n_blocked > 0, f"{n_blocked} Treffer, Badge {badge!r}")
+
+    # ---- element hiding ----
+    port = start_test_server()
+    test_url = f"http://{TEST_HOST}:{port}/"
+    ads, ads_id = br.open(test_url)
+    time.sleep(3)
+    shown = ("Object.fromEntries(['google_ads', 'div-gpt-ad-123', 'late', 'content'].map(id => "
+             "[id, getComputedStyle(document.getElementById(id)).display]).concat([['klasse', "
+             "getComputedStyle(document.querySelector('.advertisement.leaderboard')).display]]))")
+    d = ads.eval(shown)
+    check("Kosmetik: Werbe-ID, -Klasse, [id^=], nachgeladenes Element ausgeblendet (trotz CSP)",
+          d == {"google_ads": "none", "div-gpt-ad-123": "none", "late": "none", "content": "block", "klasse": "none"}, d)
+    ctx = sw.eval("getCosmetics().then(data => { const c = cosmeticContext(data, 'www.spiegel.de'); "
+                  "const g = cosmeticContext(data, 'www.google.de'); return {spiegel: c.specific.length, "
+                  "googleGenerichide: g.generichide, local: cosmeticContext(data, '127.0.0.1').generichide}; })")
+    check("Kosmetik: seitenspezifische Regeln, $generichide (auch google.*)",
+          ctx["spiegel"] > 0 and ctx["googleGenerichide"] and ctx["local"], ctx)
+    sw.eval(f"saveSettings({{whitelist: [{json.dumps(TEST_HOST)}]}})")
+    ads.call("Page.reload")
+    time.sleep(3)
+    d = ads.eval(shown)
+    check("Kosmetik: Ausnahme -> nichts ausgeblendet", "none" not in d.values(), d)
+    sw.eval("saveSettings({whitelist: []})")
+    ads.close()
+    br.close_page(ads_id)
 
     # ---- South Park: DAI stream blocked (site_fixes #1), player starts with the original stream ----
     sp, sp_id = br.open("https://www.southpark.de/folgen/mphf21/south-park-butters-ober-bitch-staffel-13-ep-9")
