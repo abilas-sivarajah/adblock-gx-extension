@@ -1,14 +1,19 @@
 // AdBlock GX - service worker.
-// Registers the site scripts (Twitch, YouTube, Netflix) in the page's MAIN world, generated
-// from the desktop browser's scripts/*.js by tools/build_extension.py. "Protection off"
-// unregisters them, the exception list becomes their excludeMatches - the scripts themselves
-// always run with {enabled: true, whitelist: []}.
+// - Site scripts (Twitch, YouTube, Netflix; generated from the desktop browser's scripts/*.js by
+//   tools/build_extension.py) are registered in the page's MAIN world. "Protection off"
+//   unregisters them, the exception list becomes their excludeMatches - the scripts themselves
+//   always run with {enabled: true, whitelist: []}.
+// - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
+//   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
 'use strict';
 
 const DEFAULT_SETTINGS = {
     enabled: true,
     whitelist: [],      // domains without "www.", subdomains included
+    rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
 };
+// above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
+const WHITELIST_PRIORITY = 100;
 
 const SITE_SCRIPTS = [
     {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js']},
@@ -87,9 +92,64 @@ async function syncContentScripts(settings) {
     if (add.length) await chrome.scripting.registerContentScripts(add);
 }
 
+// ---- network rules ----
+let rulesetInfo = null;
+
+function getRulesetInfo() {
+    if (!rulesetInfo) {
+        rulesetInfo = fetch(chrome.runtime.getURL('generated/rulesets.json')).then(function (r) { return r.json(); });
+    }
+    return rulesetInfo;
+}
+
+function rulesetWanted(ruleset, settings) {
+    if (!settings.enabled) return false;
+    if (ruleset.mode === 'always') return true;
+    const choice = settings.rulesets[ruleset.id];
+    return typeof choice === 'boolean' ? choice : true;  // "on" and "auto" lists start enabled
+}
+
+async function syncRulesets(settings) {
+    const info = await getRulesetInfo();
+    const enabledNow = new Set(await chrome.declarativeNetRequest.getEnabledRulesets());
+    const wanted = info.rulesets.filter(function (r) { return rulesetWanted(r, settings); });
+    const disable = info.rulesets.filter(function (r) { return enabledNow.has(r.id) && !wanted.includes(r); });
+    // room in Chrome's static rule limit: 30,000 per extension guaranteed, more if free globally
+    let room = await chrome.declarativeNetRequest.getAvailableStaticRuleCount();
+    disable.forEach(function (r) { room += r.rules; });
+    const enable = [];
+    for (const r of wanted) {  // in manifest order: site fixes and the standard lists first
+        if (enabledNow.has(r.id)) continue;
+        if (r.rules <= room) {
+            enable.push(r.id);
+            room -= r.rules;
+        }  // else: shown as "does not fit" in the popup
+    }
+    if (enable.length || disable.length) {
+        await chrome.declarativeNetRequest.updateEnabledRulesets({
+            enableRulesetIds: enable, disableRulesetIds: disable.map(function (r) { return r.id; })});
+    }
+}
+
+async function syncWhitelistRules(settings) {
+    const domains = settings.enabled ? settings.whitelist.slice().sort() : [];
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    const current = existing.length === 1 && existing[0].id === 1 && existing[0].condition.requestDomains;
+    if (current ? current.join() === domains.join() : !existing.length && !domains.length) return;
+    await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: existing.map(function (r) { return r.id; }),
+        addRules: domains.length ? [{
+            id: 1, priority: WHITELIST_PRIORITY, action: {type: 'allowAllRequests'},
+            condition: {requestDomains: domains, resourceTypes: ['main_frame', 'sub_frame']},
+        }] : [],
+    });
+}
+
 // ---- toolbar button ----
 async function updateAction(settings) {
     const on = settings.enabled;
+    // number of blocked requests per tab, counted by Chrome
+    await chrome.declarativeNetRequest.setExtensionActionOptions({displayActionCountAsBadgeText: on});
     await chrome.action.setIcon({path: on ? {16: 'icons/icon16.png', 32: 'icons/icon32.png'}
                                           : {16: 'icons/off16.png', 32: 'icons/off32.png'}});
     await chrome.action.setTitle({title: on ? 'AdBlock GX' : 'AdBlock GX – Schutz aus'});
@@ -108,7 +168,7 @@ function sync() {
 
 async function runSync() {
     const settings = await getSettings();
-    const steps = [syncContentScripts, updateAction];
+    const steps = [syncContentScripts, syncRulesets, syncWhitelistRules, updateAction];
     for (const step of steps) {
         try {
             await step(settings);
@@ -126,11 +186,20 @@ async function tabState(tabId) {
     const settings = await getSettings();
     const tab = tabId != null ? await chrome.tabs.get(tabId).catch(function () { return null; }) : null;
     const host = tab ? hostOf(tab.url || '') : '';
+    const info = await getRulesetInfo();
+    const enabledNow = new Set(await chrome.declarativeNetRequest.getEnabledRulesets());
+    // with declarativeNetRequestFeedback the badge text is the real count
+    const badge = tab ? await chrome.action.getBadgeText({tabId: tab.id}).catch(function () { return ''; }) : '';
     return {
         enabled: settings.enabled,
         host: host,
         site: host ? siteOf(host) : '',
         whitelisted: isWhitelisted(host, settings.whitelist),
+        blocked: /^\d+\+?$/.test(badge) ? badge : '0',
+        rulesets: info.rulesets.map(function (r) {
+            return {id: r.id, name: r.name, rules: r.rules, mode: r.mode,
+                    wanted: rulesetWanted(r, settings), active: enabledNow.has(r.id)};
+        }),
     };
 }
 
@@ -148,6 +217,13 @@ async function onPopupMessage(msg) {
         let list = settings.whitelist.filter(function (d) { return !isWhitelisted(site, [d]) && !isWhitelisted(d, [site]); });
         if (msg.whitelisted) list = list.concat([site]).sort();
         await saveSettings({whitelist: list});
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'set-ruleset') {
+        const settings = await getSettings();
+        const rulesets = Object.assign({}, settings.rulesets);
+        rulesets[msg.id] = !!msg.enabled;
+        await saveSettings({rulesets: rulesets});
         return tabState(msg.tabId);
     }
     throw new Error('unbekannte Nachricht ' + msg.type);

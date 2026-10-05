@@ -132,9 +132,26 @@ def tab_id(sw, host):
     return sw.eval(f"chrome.tabs.query({{}}).then(ts => (ts.find(t => (t.url || '').includes({json.dumps(host)})) || {{}}).id)")
 
 
-def matched_since(sw, tid, since_ms):
-    return sw.eval(f"chrome.declarativeNetRequest.getMatchedRules({{tabId: {tid}, minTimeStamp: {since_ms}}})"
-                   ".then(r => r.rulesMatchedInfo.length)")
+def block_rules():
+    """(ruleset id, rule id) of every block rule - getMatchedRules also lists allow rules."""
+    out = set()
+    for name in os.listdir(os.path.join(EXT, "generated")):
+        if name.startswith("rules_"):
+            with open(os.path.join(EXT, "generated", name), encoding="utf-8") as f:
+                out.update((name[len("rules_"):-len(".json")], r["id"]) for r in json.load(f)
+                           if r["action"]["type"] == "block")
+    return out
+
+
+BLOCK_RULES = None
+
+
+def blocked_since(sw, tid, since_ms):
+    global BLOCK_RULES
+    BLOCK_RULES = BLOCK_RULES or block_rules()
+    matched = sw.eval(f"chrome.declarativeNetRequest.getMatchedRules({{tabId: {tid}, minTimeStamp: {since_ms}}})"
+                      ".then(r => r.rulesMatchedInfo.map(m => [m.rule.rulesetId, m.rule.ruleId]))")
+    return sum(1 for rs, rid in matched if (rs, rid) in BLOCK_RULES)
 
 
 def regex_rules():
@@ -195,9 +212,25 @@ def main():
     news, news_id = br.open("https://www.spiegel.de/")
     time.sleep(8)
     tid = tab_id(sw, "spiegel.de")
-    n_blocked = matched_since(sw, tid, 0)
+    n_blocked = blocked_since(sw, tid, 0)
     badge = sw.eval(f"chrome.action.getBadgeText({{tabId: {tid}}})")
     check("spiegel.de: Anfragen blockiert", n_blocked > 0, f"{n_blocked} Treffer, Badge {badge!r}")
+
+    # ---- South Park: DAI stream blocked (site_fixes #1), player starts with the original stream ----
+    sp, sp_id = br.open("https://www.southpark.de/folgen/mphf21/south-park-butters-ober-bitch-staffel-13-ep-9")
+    played = 0
+    for _ in range(30):
+        time.sleep(1)
+        played = sp.eval("Math.max(0, ...[...document.querySelectorAll('video')].map(v => v.currentTime))")
+        if played > 5:
+            break
+    sp_tab = tab_id(sw, "southpark.de")
+    sp_rules = sw.eval(f"chrome.declarativeNetRequest.getMatchedRules({{tabId: {sp_tab}}})"
+                       ".then(r => r.rulesMatchedInfo.map(m => m.rule.rulesetId + '#' + m.rule.ruleId))")
+    check("South Park: DAI-Werbestream geblockt, Folge läuft", "site_fixes#1" in sp_rules and played > 5,
+          f"Video bei {played:.1f} s, site_fixes: {sorted(set(r for r in sp_rules if r.startswith('site_fixes')))}")
+    sp.close()
+    br.close_page(sp_id)
 
     # ---- exception list ----
     sw.eval("saveSettings({whitelist: ['spiegel.de', 'youtube.com']})")
@@ -205,7 +238,7 @@ def main():
     news.call("Page.reload")
     yt.call("Page.reload")
     time.sleep(8)
-    check("Ausnahme spiegel.de: nichts blockiert", matched_since(sw, tid, since) == 0, matched_since(sw, tid, since))
+    check("Ausnahme spiegel.de: nichts blockiert", blocked_since(sw, tid, since) == 0, blocked_since(sw, tid, since))
     check("Ausnahme youtube.com: Script läuft nicht", yt.eval("!!window.__abYouTube") is False)
     sw.eval("saveSettings({whitelist: []})")
 
@@ -215,6 +248,17 @@ def main():
                   ".then(([s, r]) => ({scripts: s.length, rulesets: r.length}))")
     check("Schutz aus: keine Scripts, keine Regelsätze", off == {"scripts": 0, "rulesets": 0}, off)
     sw.eval("saveSettings({enabled: true, whitelist: ['example.com']})")
+
+    # ---- what chrome://extensions shows (warnings of the rule sets, errors) ----
+    ext_id = sw.eval("chrome.runtime.id")
+    page, page_id = br.open(f"chrome://extensions/?id={ext_id}")
+    time.sleep(2)
+    info = page.eval("new Promise(res => chrome.developerPrivate.getExtensionInfo(%s, i => res({"
+                     "install: i.installWarnings, manifest: (i.manifestErrors || []).map(x => x.message), "
+                     "runtime: (i.runtimeErrors || []).map(x => x.message), warnings: i.runtimeWarnings})))" % json.dumps(ext_id))
+    check("chrome://extensions: keine Warnungen/Fehler", not any(info.values()), info)
+    page.close()
+    br.close_page(page_id)
     for t in (news, yt, sw):
         t.close()
     br.quit()
