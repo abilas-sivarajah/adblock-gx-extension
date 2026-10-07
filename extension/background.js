@@ -2,7 +2,9 @@
 // - Site scripts (Twitch, YouTube, Netflix; generated from the desktop browser's scripts/*.js by
 //   tools/build_extension.py) are registered in the page's MAIN world. "Protection off"
 //   unregisters them, the exception list becomes their excludeMatches - the scripts themselves
-//   always run with {enabled: true, whitelist: []}.
+//   always run with {enabled: true, whitelist: []}. Twitch comes in two builds: with and without
+//   ad spoofing (reports blocked ads to Twitch as watched, with the viewer's login) - a setting,
+//   off by default.
 // - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
 //   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
 // - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
@@ -17,12 +19,13 @@ const DEFAULT_SETTINGS = {
     whitelist: [],      // domains without "www.", subdomains included
     rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
     discordHint: true,  // banner on Netflix / Prime Video / Disney+ while hardware acceleration is on
+    twitchAdSpoofing: false,  // generated/twitch_spoofing.js instead of twitch.js
 };
 // above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
 const WHITELIST_PRIORITY = 100;
 
 const SITE_SCRIPTS = [
-    {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js']},
+    {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js'], spoofingJs: ['generated/twitch_spoofing.js']},
     {id: 'ab-youtube', matches: ['*://*.youtube.com/*'], js: ['generated/youtube.js']},
     {id: 'ab-netflix', matches: ['*://*.netflix.com/*'], js: ['generated/netflix.js']},
 ];
@@ -81,7 +84,8 @@ function wantedContentScripts(settings) {
     if (settings.enabled) {
         const exclude = settings.whitelist.map(excludePattern);
         SITE_SCRIPTS.forEach(function (s) {
-            scripts.push({id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true});
+            const js = settings.twitchAdSpoofing && s.spoofingJs || s.js;
+            scripts.push({id: s.id, matches: s.matches, js: js, world: 'MAIN', runAt: 'document_start', allFrames: true});
         });
         scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
                       world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
@@ -119,6 +123,7 @@ let rulesetInfo = null;
 function getRulesetInfo() {
     if (!rulesetInfo) {
         rulesetInfo = fetch(chrome.runtime.getURL('generated/rulesets.json')).then(function (r) { return r.json(); });
+        rulesetInfo.catch(function () { rulesetInfo = null; });
     }
     return rulesetInfo;
 }
@@ -220,7 +225,18 @@ function cosmeticContext(data, host) {
 
 function hideCss(selectors) {
     // one rule per selector: a selector the browser does not understand only drops itself
+    // (open brackets/quotes would take the following rules along - the build skips those)
     return selectors.map(function (s) { return s + ' { display: none !important; }'; }).join('\n');
+}
+
+// hide rules of the generic selectors that have no class/id key - the same for every host
+// without an exception for one of them, so built once instead of for every frame
+function genericCss(data, ctx) {
+    if (ctx.generichide) return '';
+    const kept = ctx.exceptions.size ? data.generic.filter(function (s) { return !ctx.exceptions.has(s); }) : data.generic;
+    if (kept.length < data.generic.length) return hideCss(kept);
+    if (data.genericCss == null) data.genericCss = hideCss(data.generic);
+    return data.genericCss;
 }
 
 async function onCosmeticMessage(msg, sender) {
@@ -235,20 +251,18 @@ async function onCosmeticMessage(msg, sender) {
     const ctx = cosmeticContext(data, frameHost);
     if (ctx.elemhide) return {active: false};
 
-    const selectors = [];
-    const add = function (list) {
-        (list || []).forEach(function (s) { if (!ctx.exceptions.has(s)) selectors.push(s); });
-    };
     let css = '';
     if (msg.type === 'cosmetic-init') {
-        selectors.push.apply(selectors, ctx.specific);
-        if (!ctx.generichide) add(data.generic);
-        css = ctx.styles.join('\n');
+        css = [hideCss(ctx.specific), genericCss(data, ctx), ctx.styles.join('\n')].filter(Boolean).join('\n');
     } else if (!ctx.generichide) {
+        const selectors = [];
+        const add = function (list) {
+            (list || []).forEach(function (s) { if (!ctx.exceptions.has(s)) selectors.push(s); });
+        };
         (msg.classes || []).forEach(function (c) { if (typeof c === 'string') add(data.classes.get(c)); });
         (msg.ids || []).forEach(function (i) { if (typeof i === 'string') add(data.ids.get(i)); });
+        css = hideCss(selectors);
     }
-    if (selectors.length) css = hideCss(selectors) + (css ? '\n' + css : '');
     if (css) {
         const target = {tabId: tab.id};
         if (sender.documentId) target.documentIds = [sender.documentId]; else target.frameIds = [sender.frameId];
@@ -286,7 +300,8 @@ async function onDiscordMessage(msg, sender) {
         await saveSettings({discordHint: false});
         return {};
     }
-    // "discord-hint-check": the banner shows once per browser session
+    // "discord-hint-check": the banner shows once per browser session (the page checks the GPU
+    // afterwards - switching acceleration needs a browser restart, i.e. a new session, anyway)
     const settings = await getSettings();
     if (!settings.discordHint || (await chrome.storage.session.get('discordHintShown')).discordHintShown) return {show: false};
     await chrome.storage.session.set({discordHintShown: true});
@@ -328,6 +343,9 @@ async function runSync() {
 
 chrome.runtime.onInstalled.addListener(function () { sync(); });
 chrome.runtime.onStartup.addListener(function () { sync(); });
+// The browser forgets icon, title and badge when the extension is switched off and on in
+// chrome://extensions (no onInstalled/onStartup then): set them on every service worker start.
+getSettings().then(updateAction).catch(function (e) { console.error('AdBlock GX: updateAction fehlgeschlagen', e); });
 
 // ---- popup ----
 async function tabState(tabId) {
@@ -350,6 +368,8 @@ async function tabState(tabId) {
         }),
         discordHint: settings.discordHint,
         streaming: tab ? isStreamingSite(tab.url || '') : false,
+        twitchAdSpoofing: settings.twitchAdSpoofing,
+        twitch: /(^|\.)twitch\.tv$/.test(host),
     };
 }
 
@@ -367,6 +387,10 @@ async function onPopupMessage(msg) {
         let list = settings.whitelist.filter(function (d) { return !isWhitelisted(site, [d]) && !isWhitelisted(d, [site]); });
         if (msg.whitelisted) list = list.concat([site]).sort();
         await saveSettings({whitelist: list});
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'set-twitch-spoofing') {
+        await saveSettings({twitchAdSpoofing: !!msg.enabled});
         return tabState(msg.tabId);
     }
     if (msg.type === 'set-discord-hint') {

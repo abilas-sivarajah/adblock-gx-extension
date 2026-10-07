@@ -1,9 +1,21 @@
-"""Desktop shortcut "Opera GX (Discord)" for start_opera_discord.bat (like create_shortcut.py)."""
+"""Desktop shortcut "Opera GX (Discord)" for start_opera_discord.bat (like create_shortcut.py of the
+desktop browser). Icon: assets/icon.ico of the desktop browser (AdBlockBrowser next to this
+repository, see build_extension.py), otherwise the one of Opera GX."""
 import os
 
 import win32com.client
 
+from build_extension import find_browser_dir
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def shortcut_icon():
+    browser = find_browser_dir(required=False)
+    candidates = [os.path.join(browser, 'assets', 'icon.ico')] if browser else []
+    candidates += [os.path.expandvars(r'%LOCALAPPDATA%\Programs\Opera GX\opera.exe'),
+                   os.path.expandvars(r'%ProgramFiles%\Opera GX\opera.exe')]
+    return next((f'{path},0' for path in candidates if os.path.exists(path)), None)
 
 
 def create_discord_shortcut():
@@ -15,7 +27,9 @@ def create_discord_shortcut():
     shortcut.TargetPath = os.path.join(ROOT, 'start_opera_discord.bat')
     shortcut.WorkingDirectory = ROOT
     shortcut.WindowStyle = 7  # minimized: the console window only flashes in the taskbar
-    shortcut.IconLocation = f"{os.path.join(ROOT, 'assets', 'icon.ico')},0"
+    icon = shortcut_icon()
+    if icon:
+        shortcut.IconLocation = icon
     shortcut.Description = 'Opera GX ohne Hardware-Beschleunigung (Netflix & Co. im Discord-Stream sichtbar)'
     shortcut.Save()
 

@@ -439,7 +439,8 @@ class CosmeticCollector:
                 if not style:
                     stats["ungültiger Selektor"] += 1
                     return False
-        if not selector or "{" in selector or "}" in selector:
+        if (not selector or "{" in selector or "}" in selector or not css_balanced(selector)
+                or (style and not css_balanced(style))):
             stats["ungültiger Selektor"] += 1
             return False
 
@@ -514,6 +515,39 @@ class CosmeticCollector:
             "generichide": sorted(self.generichide),
             "elemhide": sorted(self.elemhide),
         }
+
+
+def css_balanced(text: str) -> bool:
+    """True if every quote and bracket is closed and there is no comment. background.js inserts
+    many rules as one style sheet: an open "(", "[", quote or "/*" there swallows every rule after
+    it, not just its own (measured in Chromium)."""
+    closing = {"(": ")", "[": "]"}
+    stack = []
+    quote = None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            if i + 1 >= len(text):
+                return False
+            i += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = None
+            elif c == "\n":
+                return False
+        elif c in "\"'":
+            quote = c
+        elif c in closing:
+            stack.append(closing[c])
+        elif c in ")]":
+            if not stack or stack.pop() != c:
+                return False
+        elif text.startswith("/*", i):
+            return False
+        i += 1
+    return quote is None and not stack
 
 
 def important_declarations(declarations: str):

@@ -257,6 +257,14 @@ def main():
             break
     check("Twitch: Video-Worker eingehängt (hookedWorkers, playlists)", bool(stats and stats["hooked"] and stats["playlists"]), stats)
     br.close_page(tw_id)
+    twitch_js = ("chrome.scripting.getRegisteredContentScripts({ids: ['ab-twitch']}).then(s => s[0].js)")
+    before = sw.eval(twitch_js)
+    sw.eval("saveSettings({twitchAdSpoofing: true})")
+    on = sw.eval(twitch_js)
+    sw.eval("saveSettings({twitchAdSpoofing: false})")
+    check("Twitch: Ad-Spoofing standardmäßig aus, Schalter wählt twitch_spoofing.js",
+          before == ["generated/twitch.js"] and on == ["generated/twitch_spoofing.js"]
+          and sw.eval(twitch_js) == ["generated/twitch.js"], (before, on))
 
     # ---- network blocking ----
     news, news_id = br.open("https://www.spiegel.de/")

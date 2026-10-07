@@ -29,14 +29,16 @@ Erweiterung.
   ersetzt, nach einer zweiten Prüfung durch einen werbefreien Stream in voller Qualität; danach geht es
   ohne Hänger zurück zum eigenen Stream. Bei einer Werbepause des Streamers (alle Zugänge haben dann
   Werbung) kommt schwarzes, stummes Bild statt Werbung, mit Restzeit. VOD-Werbung und Werbebanner
-  werden blockiert. **Ad-Spoofing** meldet Twitch blockierte Werbung als vollständig gesehen
-  (Impression, Quartile und Pod-Abschluss via GraphQL), damit Twitch den Stream nicht mit erneuten
-  Werbeblöcken spammt.
+  werden blockiert. Optional, **standardmäßig aus** (Popup → Twitch): **Ad-Spoofing** meldet Twitch
+  blockierte Werbung als vollständig gesehen (Impression, Quartile und Pod-Abschluss via GraphQL),
+  damit Twitch nicht gleich die nächste Werbung schickt. Das geschieht mit deinem Twitch-Konto für
+  Werbung, die nie lief – kann gegen die Nutzungsbedingungen von Twitch verstoßen.
 - **Netflix** (Abo mit Werbung): Werbepausen und Pausen-Werbung werden aus den Daten entfernt, ein
   durchgerutschter Spot wird abgedeckt.
 - **South Park** (southpark.de) startet ohne Werbung (Seiten-Fixes).
 - **Popup im GX-Look:** Schutz an/aus, Ausnahme für die aktuelle Seite, blockierte Anfragen, Status der
-  YouTube/Twitch/Netflix-Scripts („Werbedaten entfernt 6×“), Filterlisten an/aus, Discord-Stream-Modus.
+  YouTube/Twitch/Netflix-Scripts („Werbedaten entfernt 6×“), Filterlisten an/aus, Discord-Stream-Modus,
+  Twitch-Ad-Spoofing.
 
 | Popup auf YouTube | Popup auf Netflix | Hinweis auf Netflix |
 |---|---|---|
@@ -44,8 +46,9 @@ Erweiterung.
 
 ## 🚀 Bauen und laden
 
-Voraussetzungen: **Python 3** (nur Standardbibliothek; **Pillow** optional für die Icons) und der
-Desktop-Browser im Ordner **`AdBlockBrowser` neben diesem Repo**:
+Voraussetzungen: **Python 3** (nur Standardbibliothek; **Pillow** optional für die Icons, **Node.js**
+optional für die Syntax-Prüfung der Seiten-Scripts) und der Desktop-Browser im Ordner
+**`AdBlockBrowser` neben diesem Repo**:
 
 ```powershell
 git clone https://github.com/abilas-sivarajah/adblock-browser-gx AdBlockBrowser
@@ -61,7 +64,9 @@ python tools/build_extension.py
 | `--browser PFAD` | Desktop-Browser liegt woanders (auch per Umgebungsvariable `ADBLOCK_BROWSER_DIR`) |
 
 Der Build erzeugt `extension\generated\` (nicht in Git), meldet Regeln pro Liste, übersprungene Regeln
-nach Grund und die Chrome-Limits.
+nach Grund und die Chrome-Limits. Ist Node.js installiert, prüft er die Seiten-Scripts auf
+Syntaxfehler – ein kaputtes Script würde im Browser sonst einfach nicht laufen. Fehlt eine Filterliste
+(kein Download, kein Cache), steht am Ende eine WARNUNG.
 
 **Laden:** `chrome://extensions` bzw. `opera://extensions` → **Entwicklermodus** an → **Entpackte
 Erweiterung laden** → Ordner `extension\`. Danach das Symbol über das Puzzle-Menü anheften.
@@ -126,8 +131,8 @@ selbst abschalten und den Browser nicht mit Parametern neu starten, deshalb:
 
 | Befehl | Prüft |
 |---|---|
-| `python dev_tests\dnr_unit.py` | Regel-Konverter: Filterzeilen rein → erwartete Chrome-Regeln raus (47 Tests) |
-| `python dev_tests\ext_smoke.py` | Erweiterung in unsichtbarem Opera GX (eigenes Testprofil): Scripts, Regelsätze, Regex-Regeln, YouTube/Twitch/Netflix, Blockieren, Ausblenden trotz CSP, South Park, Ausnahme, Schutz aus, Neustart, `chrome://extensions` ohne Warnungen |
+| `python dev_tests\dnr_unit.py` | Regel-Konverter: Filterzeilen rein → erwartete Chrome-Regeln raus (48 Tests) |
+| `python dev_tests\ext_smoke.py` | Erweiterung in unsichtbarem Opera GX (eigenes Testprofil): Scripts, Regelsätze, Regex-Regeln, YouTube/Twitch/Netflix, Twitch-Ad-Spoofing-Schalter, Blockieren, Ausblenden trotz CSP, South Park, Ausnahme, Schutz aus, Neustart, `chrome://extensions` ohne Warnungen |
 | `python dev_tests\ext_discord.py` | Discord-Stream-Modus in einem Opera-Fenster außerhalb des Bildschirms: Banner, Popup, Einstellungs-Knopf, Parameter der `.bat` |
 
 Die Browser-Tests brauchen `pip install websockets` und Opera GX (`--browser` für einen anderen
