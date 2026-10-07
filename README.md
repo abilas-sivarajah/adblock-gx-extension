@@ -24,9 +24,12 @@ Erweiterung.
   Content-Security-Policy.
 - **YouTube** ohne Werbung: Werbedaten werden aus den Player-Antworten entfernt, Reste übersprungen,
   Werbeblöcke und der Adblock-Hinweis ausgeblendet.
-- **Twitch** ohne Video-Werbung: Werbung nur in deiner Sitzung (z. B. beim Öffnen eines Kanals) wird
-  durch einen werbefreien Stream ersetzt. Bei einer Werbepause des Streamers (alle Zugänge haben dann
-  Werbung) wird der Player abgedeckt und stumm geschaltet, mit Restzeit.
+- **Twitch** ohne Video-Werbung (Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB) von GosuDRM):
+  Werbung nur in deiner Sitzung (z. B. beim Öffnen eines Kanals) wird sofort durch den 360p-Zugang
+  ersetzt, nach einer zweiten Prüfung durch einen werbefreien Stream in voller Qualität; danach geht es
+  ohne Hänger zurück zum eigenen Stream. Bei einer Werbepause des Streamers (alle Zugänge haben dann
+  Werbung) kommt schwarzes, stummes Bild statt Werbung, mit Restzeit. VOD-Werbung und Werbebanner
+  werden blockiert.
 - **Netflix** (Abo mit Werbung): Werbepausen und Pausen-Werbung werden aus den Daten entfernt, ein
   durchgerutschter Spot wird abgedeckt.
 - **South Park** (southpark.de) startet ohne Werbung (Seiten-Fixes).
@@ -103,7 +106,7 @@ selbst abschalten und den Browser nicht mit Parametern neu starten, deshalb:
   über wechselnde Domains nach; blockiert oder versteckt man auch das, löscht die Seite ihren Inhalt und
   zeigt eine Sperre („Ich verwende keinen Adblocker“). Dort bleibt Werbung sichtbar.
 - **Twitch:** Während der Werbepause eines Streamers gibt es keinen werbefreien Stream – die Wartezeit
-  bleibt (abgedeckt und stumm).
+  bleibt (schwarzes Bild mit Hinweis).
 - `$important` liegt über normalen Block-Regeln, aber unter Ausnahmen (in der Brave-Engine des
   Desktop-Browsers gewinnt `$important` auch gegen Ausnahmen; betrifft nur ein Dutzend Regeln).
 

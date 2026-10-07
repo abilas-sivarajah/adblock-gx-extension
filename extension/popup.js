@@ -135,12 +135,17 @@ function describeSite(s) {
         if (s.yt.dialogs) lines.push(['YouTube', times(s.yt.dialogs, 'Adblock-Hinweis entfernt')]);
     }
     if (s.tw) {
-        if (s.tw.overlayActive) lines.push(['Twitch', 'Werbepause läuft – abgedeckt und stumm']);
+        if (s.tw.overlayActive) lines.push(['Twitch', 'Werbepause läuft – ausgeblendet']);
+        if (s.tw.bridgeActive) lines.push(['Twitch', 'Werbung übersprungen – gerade 360p-Ersatz']);
         lines.push(['Twitch', s.tw.hookedWorkers ? 'Player eingehängt' + (s.tw.adBreaks ? ', ' + times(s.tw.adBreaks, 'Werbung erkannt') : '')
                                                  : 'aktiv, Player noch nicht gestartet']);
         if (s.tw.replaced) lines.push(['Twitch', times(s.tw.replaced, 'werbefreien Stream eingesetzt') +
                                        (s.tw.lastBackupType ? ' (' + s.tw.lastBackupType + ')' : '')]);
+        if (s.tw.nativeReturns) lines.push(['Twitch', times(s.tw.nativeReturns, 'zurück zum eigenen Stream')]);
+        if (s.tw.holds) lines.push(['Twitch', times(s.tw.holds, 'Werbepause durch schwarzes Bild ersetzt')]);
         if (s.tw.masked) lines.push(['Twitch', times(s.tw.masked, 'Werbepause abgedeckt')]);
+        if (s.tw.adSeconds) lines.push(['Twitch', number(s.tw.adSeconds) + ' s Werbung nicht gezeigt']);
+        if (s.tw.vodAdsBlocked) lines.push(['Twitch', times(s.tw.vodAdsBlocked, 'VOD-Werbung blockiert')]);
     }
     if (s.nf) {
         lines.push(['Netflix', s.nf.breaksRemoved ? number(s.nf.breaksRemoved) + ' Werbepause(n) entfernt'
@@ -167,7 +172,8 @@ function loadSiteStatus() {
             };
             return {
                 yt: pick(window.__abYouTube, ['pruned', 'skipped', 'dialogs']),
-                tw: pick(window.__abTwitch, ['hookedWorkers', 'adBreaks', 'replaced', 'masked', 'overlayActive', 'lastBackupType']),
+                tw: pick(window.__abTwitch, ['hookedWorkers', 'adBreaks', 'replaced', 'masked', 'holds', 'nativeReturns', 'adSeconds',
+                                             'vodAdsBlocked', 'overlayActive', 'bridgeActive', 'lastBackupType']),
                 nf: pick(window.__abNetflix, ['breaksRemoved', 'pauseAdsRemoved', 'adsShown', 'pruning']),
             };
         },
