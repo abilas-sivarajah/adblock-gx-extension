@@ -3,8 +3,9 @@
 //   tools/build_extension.py) are registered in the page's MAIN world. "Protection off"
 //   unregisters them, the exception list becomes their excludeMatches - the scripts themselves
 //   always run with {enabled: true, whitelist: []}. Twitch comes in two builds: with and without
-//   ad spoofing (reports blocked ads to Twitch as watched, with the viewer's login) - a setting,
-//   off by default.
+//   ad spoofing (reports blocked ads as watched, with the viewer's login) - a setting, off by
+//   default. The flag is baked into generated/twitch.js vs twitch_spoofing.js for the next page
+//   load; the current Twitch tab is told over content/twitch_bridge.js, so no reload is needed.
 // - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
 //   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
 // - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
@@ -87,6 +88,8 @@ function wantedContentScripts(settings) {
             const js = settings.twitchAdSpoofing && s.spoofingJs || s.js;
             scripts.push({id: s.id, matches: s.matches, js: js, world: 'MAIN', runAt: 'document_start', allFrames: true});
         });
+        scripts.push({id: 'ab-twitch-bridge', matches: ['*://*.twitch.tv/*'], js: ['content/twitch_bridge.js'],
+                      world: 'ISOLATED', runAt: 'document_start', allFrames: true});
         scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
                       world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
         scripts.forEach(function (s) { if (exclude.length) s.excludeMatches = exclude; });
@@ -391,6 +394,10 @@ async function onPopupMessage(msg) {
     }
     if (msg.type === 'set-twitch-spoofing') {
         await saveSettings({twitchAdSpoofing: !!msg.enabled});
+        const tabs = await chrome.tabs.query({url: '*://*.twitch.tv/*'});
+        await Promise.all(tabs.map(function (tab) {
+            return chrome.tabs.sendMessage(tab.id, {type: 'twitch-spoofing', enabled: !!msg.enabled}).catch(function () {});
+        }));
         return tabState(msg.tabId);
     }
     if (msg.type === 'set-discord-hint') {

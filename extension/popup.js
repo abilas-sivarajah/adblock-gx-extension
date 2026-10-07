@@ -66,7 +66,6 @@ $('spoofing').addEventListener('click', function () {
     send({type: 'set-twitch-spoofing', enabled: !state.twitchAdSpoofing}).then(function (s) {
         state = s;
         render();
-        if (state.twitch && state.enabled && !state.whitelisted) reloadTab();  // the script is chosen on page load
     }).catch(showError);
 });
 
