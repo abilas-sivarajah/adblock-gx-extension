@@ -70,6 +70,8 @@ def find_browser_dir(path=None, required=True):
     path = os.path.abspath(path or os.environ.get("ADBLOCK_BROWSER_DIR") or DEFAULT_BROWSER_DIR)
     if os.path.exists(os.path.join(path, "site_scripts.py")):
         return path
+    if os.path.exists(r"C:\AdBlockBrowser\site_scripts.py"):
+        return r"C:\AdBlockBrowser"
     if not required:
         return None
     sys.exit(f"Desktop-Browser nicht gefunden: {path}\n"

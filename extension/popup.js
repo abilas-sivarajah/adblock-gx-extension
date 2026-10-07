@@ -144,6 +144,7 @@ function describeSite(s) {
         if (s.tw.nativeReturns) lines.push(['Twitch', times(s.tw.nativeReturns, 'zurück zum eigenen Stream')]);
         if (s.tw.holds) lines.push(['Twitch', times(s.tw.holds, 'Werbepause durch schwarzes Bild ersetzt')]);
         if (s.tw.masked) lines.push(['Twitch', times(s.tw.masked, 'Werbepause abgedeckt')]);
+        if (s.tw.spoofedAds) lines.push(['Twitch', times(s.tw.spoofedAds, 'Werbung als gesehen gemeldet (Spoofing)')]);
         if (s.tw.adSeconds) lines.push(['Twitch', number(s.tw.adSeconds) + ' s Werbung nicht gezeigt']);
         if (s.tw.vodAdsBlocked) lines.push(['Twitch', times(s.tw.vodAdsBlocked, 'VOD-Werbung blockiert')]);
     }
@@ -173,7 +174,7 @@ function loadSiteStatus() {
             return {
                 yt: pick(window.__abYouTube, ['pruned', 'skipped', 'dialogs']),
                 tw: pick(window.__abTwitch, ['hookedWorkers', 'adBreaks', 'replaced', 'masked', 'holds', 'nativeReturns', 'adSeconds',
-                                             'vodAdsBlocked', 'overlayActive', 'bridgeActive', 'lastBackupType']),
+                                             'vodAdsBlocked', 'overlayActive', 'bridgeActive', 'lastBackupType', 'spoofedAds']),
                 nf: pick(window.__abNetflix, ['breaksRemoved', 'pauseAdsRemoved', 'adsShown', 'pruning']),
             };
         },

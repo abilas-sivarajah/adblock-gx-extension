@@ -29,7 +29,9 @@ Erweiterung.
   ersetzt, nach einer zweiten Prüfung durch einen werbefreien Stream in voller Qualität; danach geht es
   ohne Hänger zurück zum eigenen Stream. Bei einer Werbepause des Streamers (alle Zugänge haben dann
   Werbung) kommt schwarzes, stummes Bild statt Werbung, mit Restzeit. VOD-Werbung und Werbebanner
-  werden blockiert.
+  werden blockiert. **Ad-Spoofing** meldet Twitch blockierte Werbung als vollständig gesehen
+  (Impression, Quartile und Pod-Abschluss via GraphQL), damit Twitch den Stream nicht mit erneuten
+  Werbeblöcken spammt.
 - **Netflix** (Abo mit Werbung): Werbepausen und Pausen-Werbung werden aus den Daten entfernt, ein
   durchgerutschter Spot wird abgedeckt.
 - **South Park** (southpark.de) startet ohne Werbung (Seiten-Fixes).
