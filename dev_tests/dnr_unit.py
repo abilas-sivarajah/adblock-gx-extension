@@ -127,6 +127,13 @@ check("exceptions per host (#@# and ~domain)", cos["exceptions"].get("example.co
       and cos["exceptions"].get("cd.ab.example.com") == [".z"], cos["exceptions"])
 check("#@# without domain removes the generic rule", "global" not in cos["classes"])
 check("style rule -> CSS with !important", cos["styles"].get("example.com") == [".hdr { top:0 !important }"], cos["styles"])
+# an open bracket/quote/comment would swallow every rule after it in the inserted style sheet
+res, cos = convert("\n".join([
+    "##.a:not(.x", '##div[title="x]', "##div[data-x", "##.b /* c", "##.c)", "example.com##.d {background: url(x}",
+    '##a[href="/(x"]', "##.e\\:f", "##.ok:not(.x)"]))
+check("unbalanced selectors/styles skipped, quoted brackets and escapes kept",
+      res.stats["ungültiger Selektor"] == 6 and cos["generic"] == ['a[href="/(x"]', ".e\\:f"] and set(cos["classes"]) == {"ok"}
+      and cos["styles"] == {}, (dict(res.stats), cos["generic"], cos["classes"], cos["styles"]))
 
 # ---- validation ----
 browser = find_browser_dir(required=False)

@@ -7,7 +7,6 @@
     'use strict';
     if (window.top !== window || window.__abDiscordHint) return;
     window.__abDiscordHint = true;
-    if (!abGpuInfo().accelerated) return;  // stream mode already active: the video shows up in Discord
 
     function send(msg) {
         try {
@@ -61,7 +60,9 @@
         document.documentElement.appendChild(host);
     }
 
+    // asks first: the GPU check creates a WebGL context, only needed once per session
     send({type: 'discord-hint-check'}).then(function (r) {
-        if (r && r.show) setTimeout(show, 1500);
+        // stream mode already active (no acceleration): the video shows up in Discord
+        if (r && r.show && abGpuInfo().accelerated) setTimeout(show, 1500);
     }, function () {});
 })();

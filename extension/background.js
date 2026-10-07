@@ -119,6 +119,7 @@ let rulesetInfo = null;
 function getRulesetInfo() {
     if (!rulesetInfo) {
         rulesetInfo = fetch(chrome.runtime.getURL('generated/rulesets.json')).then(function (r) { return r.json(); });
+        rulesetInfo.catch(function () { rulesetInfo = null; });
     }
     return rulesetInfo;
 }
@@ -220,7 +221,18 @@ function cosmeticContext(data, host) {
 
 function hideCss(selectors) {
     // one rule per selector: a selector the browser does not understand only drops itself
+    // (open brackets/quotes would take the following rules along - the build skips those)
     return selectors.map(function (s) { return s + ' { display: none !important; }'; }).join('\n');
+}
+
+// hide rules of the generic selectors that have no class/id key - the same for every host
+// without an exception for one of them, so built once instead of for every frame
+function genericCss(data, ctx) {
+    if (ctx.generichide) return '';
+    const kept = ctx.exceptions.size ? data.generic.filter(function (s) { return !ctx.exceptions.has(s); }) : data.generic;
+    if (kept.length < data.generic.length) return hideCss(kept);
+    if (data.genericCss == null) data.genericCss = hideCss(data.generic);
+    return data.genericCss;
 }
 
 async function onCosmeticMessage(msg, sender) {
@@ -235,20 +247,18 @@ async function onCosmeticMessage(msg, sender) {
     const ctx = cosmeticContext(data, frameHost);
     if (ctx.elemhide) return {active: false};
 
-    const selectors = [];
-    const add = function (list) {
-        (list || []).forEach(function (s) { if (!ctx.exceptions.has(s)) selectors.push(s); });
-    };
     let css = '';
     if (msg.type === 'cosmetic-init') {
-        selectors.push.apply(selectors, ctx.specific);
-        if (!ctx.generichide) add(data.generic);
-        css = ctx.styles.join('\n');
+        css = [hideCss(ctx.specific), genericCss(data, ctx), ctx.styles.join('\n')].filter(Boolean).join('\n');
     } else if (!ctx.generichide) {
+        const selectors = [];
+        const add = function (list) {
+            (list || []).forEach(function (s) { if (!ctx.exceptions.has(s)) selectors.push(s); });
+        };
         (msg.classes || []).forEach(function (c) { if (typeof c === 'string') add(data.classes.get(c)); });
         (msg.ids || []).forEach(function (i) { if (typeof i === 'string') add(data.ids.get(i)); });
+        css = hideCss(selectors);
     }
-    if (selectors.length) css = hideCss(selectors) + (css ? '\n' + css : '');
     if (css) {
         const target = {tabId: tab.id};
         if (sender.documentId) target.documentIds = [sender.documentId]; else target.frameIds = [sender.frameId];
@@ -286,7 +296,8 @@ async function onDiscordMessage(msg, sender) {
         await saveSettings({discordHint: false});
         return {};
     }
-    // "discord-hint-check": the banner shows once per browser session
+    // "discord-hint-check": the banner shows once per browser session (the page checks the GPU
+    // afterwards - switching acceleration needs a browser restart, i.e. a new session, anyway)
     const settings = await getSettings();
     if (!settings.discordHint || (await chrome.storage.session.get('discordHintShown')).discordHintShown) return {show: false};
     await chrome.storage.session.set({discordHintShown: true});
@@ -328,6 +339,9 @@ async function runSync() {
 
 chrome.runtime.onInstalled.addListener(function () { sync(); });
 chrome.runtime.onStartup.addListener(function () { sync(); });
+// The browser forgets icon, title and badge when the extension is switched off and on in
+// chrome://extensions (no onInstalled/onStartup then): set them on every service worker start.
+getSettings().then(updateAction).catch(function (e) { console.error('AdBlock GX: updateAction fehlgeschlagen', e); });
 
 // ---- popup ----
 async function tabState(tabId) {

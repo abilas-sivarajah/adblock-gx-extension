@@ -67,10 +67,12 @@ LIST_SETTINGS = {
 def find_browser_dir(path=None, required=True):
     """The desktop browser's checkout: --browser, ADBLOCK_BROWSER_DIR or AdBlockBrowser next to
     this repository."""
-    path = os.path.abspath(path or os.environ.get("ADBLOCK_BROWSER_DIR") or DEFAULT_BROWSER_DIR)
+    given = path or os.environ.get("ADBLOCK_BROWSER_DIR")
+    path = os.path.abspath(given or DEFAULT_BROWSER_DIR)
     if os.path.exists(os.path.join(path, "site_scripts.py")):
         return path
-    if os.path.exists(r"C:\AdBlockBrowser\site_scripts.py"):
+    # old place - only without an explicit path, a wrong one must not silently build from here
+    if not given and os.path.exists(r"C:\AdBlockBrowser\site_scripts.py"):
         return r"C:\AdBlockBrowser"
     if not required:
         return None
@@ -113,6 +115,13 @@ def read_text(path):
         return f.read()
 
 
+def looks_like_filter_list(text):
+    """False for an empty answer or an HTML page (error page of a proxy or hotspot login) - such a
+    download must not replace a working cache."""
+    head = text.lstrip()[:100]
+    return bool(head) and not head.startswith("<")
+
+
 def load_list(src, update, offline, browser):
     """(text, where it came from) - text is None if the list is nowhere to be found."""
     path = os.path.join(CACHE_DIR, src["filename"])
@@ -122,6 +131,8 @@ def load_list(src, update, offline, browser):
             req = urllib.request.Request(src["url"], headers={"User-Agent": "Mozilla/5.0 AdBlockGX-Build/1.0"})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 text = resp.read().decode("utf-8", errors="ignore")
+            if not looks_like_filter_list(text):
+                raise ValueError("Antwort ist keine Filterliste")  # keeps the cache
             os.makedirs(CACHE_DIR, exist_ok=True)
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
@@ -218,12 +229,14 @@ def main():
 
     sources = filter_sources(browser)
     ordered = sorted(sources, key=lambda s: LIST_SETTINGS.get(s["filename"], ("", "auto"))[1] != "on")
+    missing = []
     print("Filterlisten:")
     for src in ordered:
         rid, mode = LIST_SETTINGS.get(src["filename"], (os.path.splitext(src["filename"])[0], "auto"))
         text, where = load_list(src, args.update, args.offline, browser)
         if text is None:
             print(f"  ! {src['name']}: nicht verfügbar - Regelsatz bleibt leer")
+            missing.append(src["name"])
             text = ""
         lists.append((rid, src["name"], mode, text, where, "initiator"))
 
@@ -299,7 +312,7 @@ def main():
           f"{os.path.getsize(os.path.join(GEN_DIR, 'cosmetic.json')) // 1024} KB")
 
     # ---- limits ----
-    warnings = []
+    warnings = [f"{name} nicht verfügbar (kein Download, kein Cache) - der Regelsatz ist leer." for name in missing]
     enabled = [r for r in rulesets if r["manifestEnabled"]]
     enabled_rules = sum(r["rules"] for r in enabled)
     all_rules = sum(r["rules"] for r in rulesets)
