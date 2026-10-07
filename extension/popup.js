@@ -1,6 +1,6 @@
 // AdBlock GX popup: protection on/off, exception for the current site, blocked count, status of
-// the YouTube/Twitch/Netflix scripts, Discord stream mode, Twitch ad spoofing, filter lists. Settings live in background.js
-// (chrome.storage.local); every change goes through it.
+// the YouTube/Twitch/Netflix scripts, Discord stream mode, Twitch ad spoofing, filter lists, updates.
+// Settings live in background.js (chrome.storage.local); every change goes through it.
 'use strict';
 
 const $ = function (id) { return document.getElementById(id); };
@@ -47,7 +47,95 @@ function render() {
     renderLists();
     renderDiscord();
     renderTwitch();
+    renderUpdate();
 }
+
+// ---- updates from GitHub (tools/update_extension.py, started by background.js) ----
+let updatePoll = 0;
+
+function timeAgo(ms) {
+    const min = Math.round((Date.now() - ms) / 60000);
+    if (min < 1) return 'gerade eben';
+    if (min < 60) return 'vor ' + min + ' Min.';
+    const h = Math.round(min / 60);
+    if (h < 24) return 'vor ' + h + ' Std.';
+    const d = Math.round(h / 24);
+    return 'vor ' + d + (d === 1 ? ' Tag' : ' Tagen');
+}
+
+function renderUpdate() {
+    const u = state.update;
+    const card = $('updateCard');
+    card.classList.toggle('hidden', !u);  // a popup.js newer than the running background.js
+    if (!u) return;
+    const last = u.last;
+    const skipped = last && (last.repos || []).some(function (r) { return r.state === 'skipped'; });
+    const pill = $('updatePill');
+    const [text, cls] = u.running ? ['läuft …', ''] : !last ? ['noch nicht geprüft', '']
+        : last.notInstalled ? ['nicht eingerichtet', 'hot'] : !last.ok ? ['Fehler', 'hot']
+        : skipped ? ['teilweise', 'warn'] : ['aktuell', 'ok'];
+    pill.textContent = text;
+    pill.className = 'pill' + (cls ? ' ' + cls : '');
+
+    const lines = [];
+    if (u.build && u.build.built) {
+        lines.push(['Stand', new Date(u.build.built).toLocaleString('de-DE',
+            {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'})]);
+    }
+    if (u.running) {
+        lines.push(['Läuft', u.progress || '…']);
+    } else if (last) {
+        lines.push(['Geprüft', timeAgo(last.time) + ': ' + last.message, last.ok ? '' : 'bad']);
+        (last.repos || []).forEach(function (r) {
+            if (r.state === 'current') return;
+            lines.push([r.state === 'updated' ? 'Neu' : r.state === 'error' ? 'Fehler' : 'Hinweis',
+                        r.name + ': ' + r.text, r.state === 'updated' ? '' : r.state === 'error' ? 'bad' : 'warn']);
+        });
+    }
+    const list = $('updateStatus');
+    list.textContent = '';
+    lines.forEach(function (l) {
+        const li = el('li');
+        li.appendChild(el('span', 'tag' + (l[2] ? ' ' + l[2] : ''), l[0]));
+        li.appendChild(document.createTextNode(l[1]));
+        list.appendChild(li);
+    });
+    $('updateSetup').classList.toggle('hidden', !(last && last.notInstalled));
+    const button = $('updateNow');
+    button.disabled = u.running;
+    button.textContent = u.running ? 'Aktualisiere …' : 'Jetzt aktualisieren';
+    setSwitch($('autoUpdate'), u.auto);
+    if (last && (last.notInstalled || !last.ok) && !card.dataset.opened) {
+        card.open = true;
+        card.dataset.opened = '1';
+    }
+    // follow a running update; when it brought a new build the extension reloads and closes this popup
+    if (u.running && !updatePoll) {
+        updatePoll = setInterval(function () {
+            send({type: 'state'}).then(function (s) {
+                state = s;
+                render();
+            }).catch(function () {});
+        }, 1000);
+    } else if (!u.running && updatePoll) {
+        clearInterval(updatePoll);
+        updatePoll = 0;
+    }
+}
+
+$('updateNow').addEventListener('click', function () {
+    send({type: 'run-update'}).then(function (s) {
+        state = s;
+        render();
+    }).catch(showError);
+});
+
+$('autoUpdate').addEventListener('click', function () {
+    send({type: 'set-auto-update', enabled: !state.update.auto}).then(function (s) {
+        state = s;
+        render();
+    }).catch(showError);
+});
 
 // ---- Twitch ad spoofing (a setting, off by default) ----
 function renderTwitch() {

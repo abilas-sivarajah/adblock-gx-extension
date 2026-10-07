@@ -13,6 +13,10 @@
 //   selector, like build_cosmetic_css() of the desktop browser) - the page's CSP cannot stop them.
 // - Discord stream mode: content/discord_hint.js on streaming sites points to the browser's
 //   hardware acceleration setting (an extension cannot switch it itself).
+// - Updates: at browser start and hourly, tools/update_extension.py (native messaging host) pulls
+//   both repositories from GitHub and rebuilds. An unpacked extension only reads manifest, rule
+//   sets and this worker when it is loaded, so a new build (generated/build_info.json, written last
+//   by the build - also a build run by hand) makes the extension reload itself.
 'use strict';
 
 const DEFAULT_SETTINGS = {
@@ -21,6 +25,7 @@ const DEFAULT_SETTINGS = {
     rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
     discordHint: true,  // banner on Netflix / Prime Video / Disney+ while hardware acceleration is on
     twitchAdSpoofing: false,  // generated/twitch_spoofing.js instead of twitch.js
+    autoUpdate: true,   // update from GitHub at browser start and hourly
 };
 // above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
 const WHITELIST_PRIORITY = 100;
@@ -324,6 +329,115 @@ async function updateAction(settings) {
     await chrome.action.setBadgeText({text: on ? '' : 'aus'});
 }
 
+// ---- updates from GitHub ----
+const UPDATE_HOST = 'com.adblock_gx.updater';  // tools/update_extension.py --install
+const UPDATE_EVERY_MIN = 60;
+const UPDATE_RETRY_MIN = 5;                     // GitHub not reachable, e.g. browser started before the network
+const UPDATE_MIN_GAP_MS = 3 * 60 * 1000;        // automatic runs: browser restarted right away
+let updateRun = null;                           // promise of the running update
+let updateProgress = '';
+
+function readBuildInfo() {
+    // fresh from disk: an unpacked extension reads its files on every request
+    return fetch(chrome.runtime.getURL('generated/build_info.json'), {cache: 'no-store'})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+}
+
+// storage.session is emptied whenever the extension is (re)loaded, so the first look after
+// loading notes the build that was loaded
+async function reloadIfNewBuild() {
+    const info = await readBuildInfo();
+    const loaded = (await chrome.storage.session.get('loadedBuild')).loadedBuild;
+    if (!loaded) {
+        await chrome.storage.session.set({loadedBuild: info && info.build || 'none'});
+        return false;
+    }
+    if (!info || !info.build || info.build === loaded) return false;
+    // at most one reload per build: never a loop, whatever the browser keeps across reloads
+    if ((await chrome.storage.local.get('reloadedFor')).reloadedFor === info.build) return false;
+    await chrome.storage.local.set({reloadedFor: info.build});
+    console.info('AdBlock GX: neuer Build ' + info.build + ' - lade neu');
+    chrome.runtime.reload();
+    return true;
+}
+
+function callUpdater(msg, onProgress) {
+    return new Promise(function (resolve) {
+        let port;
+        try {
+            port = chrome.runtime.connectNative(UPDATE_HOST);
+        } catch (e) {
+            resolve({ok: false, notInstalled: true, message: String(e && e.message || e)});
+            return;
+        }
+        let answered = false;
+        port.onMessage.addListener(function (m) {
+            if (m.type === 'progress') {
+                if (onProgress) onProgress(m.text);
+                return;
+            }
+            answered = true;
+            port.disconnect();
+            resolve(m);
+        });
+        port.onDisconnect.addListener(function () {
+            if (answered) return;
+            const error = chrome.runtime.lastError && chrome.runtime.lastError.message || 'Updater ohne Ergebnis beendet';
+            // "Specified native messaging host not found." / "... host is forbidden."
+            resolve({ok: false, notInstalled: /not found|forbidden/i.test(error), message: error});
+        });
+        port.postMessage(msg);
+    });
+}
+
+function runUpdate() {
+    if (!updateRun) {
+        updateProgress = 'Starte …';
+        updateRun = callUpdater({type: 'update'}, function (text) { updateProgress = text; }).then(async function (result) {
+            delete result.type;
+            result.time = Date.now();
+            await chrome.storage.local.set({lastUpdate: result});
+            if (!result.ok && !result.notInstalled) chrome.alarms.create('update-retry', {delayInMinutes: UPDATE_RETRY_MIN});
+            return result;
+        }).finally(function () {
+            updateRun = null;
+            updateProgress = '';
+        });
+        // a moment for the popup to show the result before the reload closes it
+        updateRun.then(function () { setTimeout(reloadIfNewBuild, 1500); });
+    }
+    return updateRun;
+}
+
+async function autoUpdate() {
+    const settings = await getSettings();
+    if (!settings.autoUpdate || updateRun) return;
+    const last = (await chrome.storage.local.get('lastUpdate')).lastUpdate;
+    if (last && Date.now() - last.time < UPDATE_MIN_GAP_MS) return;
+    await runUpdate();
+}
+
+async function updateState(settings) {
+    return {
+        auto: settings.autoUpdate,
+        running: !!updateRun,
+        progress: updateProgress,
+        last: (await chrome.storage.local.get('lastUpdate')).lastUpdate || null,
+        build: await readBuildInfo(),
+    };
+}
+
+chrome.alarms.onAlarm.addListener(function (alarm) {
+    if (alarm.name === 'update' || alarm.name === 'update-retry') autoUpdate();
+});
+// alarms do not reliably survive browser restarts and extension updates
+chrome.alarms.get('update').then(function (alarm) {
+    if (!alarm) chrome.alarms.create('update', {delayInMinutes: UPDATE_EVERY_MIN, periodInMinutes: UPDATE_EVERY_MIN});
+});
+// a build run by hand: picked up the next time the worker starts
+reloadIfNewBuild().catch(function (e) { console.error('AdBlock GX: Build-Prüfung fehlgeschlagen', e); });
+
 // ---- keeping everything in step with the settings (idempotent, one run at a time) ----
 let syncQueue = Promise.resolve();
 
@@ -345,7 +459,10 @@ async function runSync() {
 }
 
 chrome.runtime.onInstalled.addListener(function () { sync(); });
-chrome.runtime.onStartup.addListener(function () { sync(); });
+chrome.runtime.onStartup.addListener(function () {
+    sync();
+    autoUpdate();  // whatever changed on GitHub arrives with the next browser start
+});
 // The browser forgets icon, title and badge when the extension is switched off and on in
 // chrome://extensions (no onInstalled/onStartup then): set them on every service worker start.
 getSettings().then(updateAction).catch(function (e) { console.error('AdBlock GX: updateAction fehlgeschlagen', e); });
@@ -373,6 +490,7 @@ async function tabState(tabId) {
         streaming: tab ? isStreamingSite(tab.url || '') : false,
         twitchAdSpoofing: settings.twitchAdSpoofing,
         twitch: /(^|\.)twitch\.tv$/.test(host),
+        update: await updateState(settings),
     };
 }
 
@@ -402,6 +520,14 @@ async function onPopupMessage(msg) {
     }
     if (msg.type === 'set-discord-hint') {
         await saveSettings({discordHint: !!msg.enabled});
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'run-update') {
+        runUpdate();  // the popup follows it with "state"
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'set-auto-update') {
+        await saveSettings({autoUpdate: !!msg.enabled});
         return tabState(msg.tabId);
     }
     if (msg.type === 'open-gpu-settings') {

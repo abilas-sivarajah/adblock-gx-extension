@@ -11,6 +11,7 @@
     --accent: #fa1e4e;
     --accent-glow: rgba(250, 30, 78, .45);
     --ok: #2ee88a;
+    --warn: #ffc400;
     --danger: #ff4d5e;
 }
 
@@ -211,7 +212,18 @@ h2 {
     text-transform: uppercase;
 }
 
-.row .label small.warn { color: #ffc400; }
+.row .label small.warn { color: var(--warn); }
+.tag.warn { color: var(--warn); }
+.tag.bad { color: var(--danger); }
+#updateStatus:empty { display: none; }
+
+code {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--bg2);
+    color: var(--text);
+    font: 11.5px Consolas, monospace;
+}
 
 /* ---- collapsible cards ---- */
 details.card > summary {
@@ -251,6 +263,7 @@ details.card[open] > summary { margin-bottom: 8px; }
 }
 
 .pill.ok { color: var(--ok); border-color: rgba(46, 232, 138, .45); }
+.pill.warn { color: var(--warn); border-color: rgba(255, 196, 0, .5); }
 .pill.hot { color: var(--accent); border-color: rgba(250, 30, 78, .6); }
 .highlight { border-color: rgba(250, 30, 78, .75); box-shadow: 0 0 14px rgba(250, 30, 78, .2); }
 

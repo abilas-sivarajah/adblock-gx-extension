@@ -213,12 +213,14 @@ def main():
     br = Browser(args.browser, fresh=True)
     print("Browser:", br.version.get("Browser"), br.version.get("User-Agent", "").split(") ")[-1])
     sw = br.worker()
+    sw.eval("saveSettings({autoUpdate: false})")  # the restart below must not pull and build (ext_update.py)
     time.sleep(2)  # onInstalled -> sync
 
     # ---- registration and rule sets ----
     scripts = sw.eval("chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id + ':' + x.world))")
     check("Scripts registriert", set(scripts) == {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN",
-                                                    "ab-cosmetic:ISOLATED", "ab-discord:ISOLATED"}, scripts)
+                                                    "ab-twitch-bridge:ISOLATED", "ab-cosmetic:ISOLATED",
+                                                    "ab-discord:ISOLATED"}, scripts)
     enabled = sw.eval("chrome.declarativeNetRequest.getEnabledRulesets()")
     meta = json.load(open(os.path.join(EXT, "generated", "rulesets.json"), encoding="utf-8"))
     check("Regelsätze aktiv", set(enabled) == {r["id"] for r in meta["rulesets"]}, enabled)
@@ -356,7 +358,7 @@ def main():
                     "({enabled: s.enabled, whitelist: s.whitelist, scripts: c.length, "
                     "exclude: (c.find(x => x.id === 'ab-twitch') || {}).excludeMatches, rulesets: r.length}))")
     check("Neustart: Einstellungen und Registrierungen bleiben",
-          state["enabled"] and state["whitelist"] == ["example.com"] and state["scripts"] == 5
+          state["enabled"] and state["whitelist"] == ["example.com"] and state["scripts"] == 6
           and state["exclude"] == ["*://*.example.com/*"] and state["rulesets"] == len(meta["rulesets"]), state)
     sw.eval("saveSettings({whitelist: []})")
     sw.close()

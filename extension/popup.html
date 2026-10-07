@@ -65,6 +65,18 @@
     <div id="lists"></div>
 </details>
 
+<details class="card" id="updateCard">
+    <summary><h2>Updates</h2><span class="pill" id="updatePill">…</span></summary>
+    <ul class="status" id="updateStatus"></ul>
+    <p class="small muted hidden" id="updateSetup">Einmal einrichten, im Ordner der Erweiterung:
+        <code>python tools\update_extension.py --install</code></p>
+    <button id="updateNow" class="action calm" type="button">Jetzt aktualisieren</button>
+    <button id="autoUpdate" class="row" type="button" aria-pressed="true">
+        <span class="label"><b>Automatisch</b><small>beim Browserstart und stündlich aus GitHub</small></span>
+        <span class="switch" aria-hidden="true"></span>
+    </button>
+</details>
+
 <div class="error small hidden" id="error"></div>
 <footer>AdBlock Browser GX · Erweiterung</footer>
 <script src="gpu.js"></script>

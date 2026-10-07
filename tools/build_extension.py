@@ -9,9 +9,14 @@ only source of the site scripts:
                                                 and site_fixes.txt as declarativeNetRequest rules
   generated/cosmetic.json                       element hiding rules of those lists
   generated/rulesets.json                       names/sizes of the rule sets (background.js, popup)
+  generated/build_info.json                     id of this build (hash over extension/) and the
+                                                commits it came from - written last, only after a
+                                                successful build: background.js reloads the
+                                                extension when it changes (tools/update_extension.py)
   icons/                                        assets/icon.png in 16/32/48/128 px (needs Pillow)
 
-and keeps the rule sets in manifest.json in step. Downloaded lists are cached in
+and keeps the rule sets in manifest.json in step. Every file is written via a temporary file, so a
+browser loading the extension meanwhile sees the old or the new file, never half of one. Downloaded lists are cached in
 tools/.cache/filters/ (re-downloaded after 12 h); without internet the cache is used, then the
 desktop browser's copies in browser_data/filters/.
 
@@ -25,7 +30,10 @@ usage: python tools/build_extension.py [--update] [--offline] [--browser PATH]
 
 import argparse
 import ast
+import datetime
+import hashlib
 import importlib
+import io
 import json
 import os
 import re
@@ -46,6 +54,7 @@ EXT_DIR = os.path.join(ROOT, "extension")
 GEN_DIR = os.path.join(EXT_DIR, "generated")
 ICON_DIR = os.path.join(EXT_DIR, "icons")
 MANIFEST = os.path.join(EXT_DIR, "manifest.json")
+BUILD_INFO = os.path.join(GEN_DIR, "build_info.json")
 CACHE_DIR = os.path.join(TOOLS_DIR, ".cache", "filters")
 CACHE_MAX_AGE = 12 * 3600
 BROWSER_REPO = "https://github.com/abilas-sivarajah/adblock-browser-gx"
@@ -85,17 +94,77 @@ def find_browser_dir(path=None, required=True):
              "oder den Pfad angeben:       python tools/build_extension.py --browser PFAD")
 
 
-def browser_commit(browser):
-    """Commit of the desktop browser the scripts came from (for rulesets.json and the summary)."""
+def git_output(repo, *args):
     try:
-        def git(*args):
-            return subprocess.run(["git", "-C", browser, *args], capture_output=True, text=True,
-                                  timeout=10).stdout.strip()
-        commit = git("rev-parse", "--short", "HEAD")
-        changed = git("status", "--porcelain", "--", "scripts", "site_scripts.py", "site_fixes.txt", "filter_engine.py")
-        return commit + (" (geändert)" if changed else "") if commit else None
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
+                              timeout=10).stdout.strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def browser_commit(browser):
+    """Commit of the desktop browser the scripts came from (for rulesets.json and the summary)."""
+    commit = git_output(browser, "rev-parse", "--short", "HEAD")
+    changed = git_output(browser, "status", "--porcelain", "--", "scripts", "site_scripts.py", "site_fixes.txt",
+                         "filter_engine.py")
+    return commit + (" (geändert)" if changed else "") if commit else None
+
+
+def write_file(path, data):
+    """Writes text or bytes via a temporary file next to it. The browser may hold a file open for a
+    moment while reading it - then replacing fails briefly on Windows."""
+    tmp = path + ".tmp"
+    if isinstance(data, str):
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+    else:
+        with open(tmp, "wb") as f:
+            f.write(data)
+    for _ in range(40):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.25)
+    os.replace(tmp, path)
+
+
+def extension_hash():
+    """Hash over every file the browser loads from extension/ - the same files give the same id."""
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(EXT_DIR):
+        dirnames[:] = sorted(d for d in dirnames if d != "_metadata")  # written by the browser
+        for name in sorted(filenames):
+            path = os.path.join(dirpath, name)
+            if path == BUILD_INFO or name.endswith(".tmp"):
+                continue
+            with open(path, "rb") as f:
+                content = f.read()
+            h.update(os.path.relpath(path, EXT_DIR).replace(os.sep, "/").encode() + b"\0")
+            h.update(hashlib.sha256(content).digest())
+    return h.hexdigest()[:16]
+
+
+def read_build_info():
+    try:
+        with open(BUILD_INFO, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_build_info(browser):
+    """Last step of a successful build. "built" stays the time of the last real change;
+    tools/update_extension.py rebuilds when the commits in "sources" are no longer checked out."""
+    old = read_build_info()
+    build = extension_hash()
+    built = old.get("built") if old.get("build") == build else None
+    info = {"build": build,
+            "built": built or datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "sources": {"extension": git_output(ROOT, "rev-parse", "HEAD"),
+                        "browser": git_output(browser, "rev-parse", "HEAD")}}
+    write_json(BUILD_INFO, info)
+    return info, build != old.get("build")
 
 
 def filter_sources(browser):
@@ -152,14 +221,12 @@ def load_list(src, update, offline, browser):
 
 
 def write_json(path, data, one_per_line=False):
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        if one_per_line:  # rule files: one rule per line - readable, but not huge
-            f.write("[\n" + ",\n".join(json.dumps(r, ensure_ascii=False, separators=(",", ":"))
-                                       for r in data) + "\n]\n")
-        else:
-            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    with open(path, encoding="utf-8") as f:
-        json.load(f)  # must be valid JSON
+    if one_per_line:  # rule files: one rule per line - readable, but not huge
+        text = "[\n" + ",\n".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) for r in data) + "\n]\n"
+    else:
+        text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    json.loads(text)  # must be valid JSON
+    write_file(path, text)
 
 
 def build_site_scripts(browser):
@@ -179,8 +246,7 @@ def build_site_scripts(browser):
              "twitch_main.js + twitch_worker.js (Ad-Spoofing an)"),
             ("youtube.js", youtube, "youtube.js"), ("netflix.js", netflix, "netflix.js")):
         paths.append(os.path.join(GEN_DIR, name))
-        with open(paths[-1], "w", encoding="utf-8", newline="\n") as f:
-            f.write(f"// Generated by tools/build_extension.py from scripts/{source} - do not edit.\n" + code)
+        write_file(paths[-1], f"// Generated by tools/build_extension.py from scripts/{source} - do not edit.\n" + code)
     print("Seiten-Scripts: twitch.js (+ twitch_spoofing.js), youtube.js, netflix.js")
     return paths
 
@@ -213,12 +279,16 @@ def build_icons(browser):
         return
     os.makedirs(ICON_DIR, exist_ok=True)
     src = Image.open(os.path.join(browser, "assets", "icon.png")).convert("RGBA")
+    def save(image, name):
+        buf = io.BytesIO()
+        image.save(buf, format="PNG", optimize=True)
+        write_file(os.path.join(ICON_DIR, name), buf.getvalue())
+
     for s in sizes:
         icon = src.resize((s, s), Image.LANCZOS)
-        icon.save(os.path.join(ICON_DIR, f"icon{s}.png"), optimize=True)
+        save(icon, f"icon{s}.png")
         if s <= 32:  # toolbar icon while protection is off: grey and darker
-            grey = ImageEnhance.Brightness(ImageEnhance.Color(icon).enhance(0.0)).enhance(0.6)
-            grey.save(os.path.join(ICON_DIR, f"off{s}.png"), optimize=True)
+            save(ImageEnhance.Brightness(ImageEnhance.Color(icon).enhance(0.0)).enhance(0.6), f"off{s}.png")
     print("Icons: 16/32/48/128 px (+ grau für 'Schutz aus')")
 
 
@@ -230,8 +300,7 @@ def sync_manifest(rulesets):
     if dnr.get("rule_resources") == wanted:
         return False
     dnr["rule_resources"] = wanted
-    with open(MANIFEST, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    write_file(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     return True
 
 
@@ -377,8 +446,10 @@ def main():
         for e in errors[:30]:
             print("  " + e)
     if script_errors or errors:
-        sys.exit(1)
-    print("\nFertig: extension/ in chrome://extensions bzw. opera://extensions als entpackte Erweiterung laden.")
+        sys.exit(1)  # no new build_info.json: the browser does not reload the extension
+    info, new = write_build_info(browser)
+    print(f"\nBuild {info['build']}" + (" (neu - die Erweiterung lädt sich selbst neu)" if new else " (unverändert)"))
+    print("Fertig: extension/ in chrome://extensions bzw. opera://extensions als entpackte Erweiterung laden.")
 
 
 if __name__ == "__main__":

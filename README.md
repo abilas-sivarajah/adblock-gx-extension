@@ -38,7 +38,9 @@ Erweiterung.
 - **South Park** (southpark.de) startet ohne Werbung (Seiten-Fixes).
 - **Popup im GX-Look:** Schutz an/aus, Ausnahme für die aktuelle Seite, blockierte Anfragen, Status der
   YouTube/Twitch/Netflix-Scripts („Werbedaten entfernt 6×“), Filterlisten an/aus, Discord-Stream-Modus,
-  Twitch-Ad-Spoofing.
+  Twitch-Ad-Spoofing, Updates.
+- **Automatische Updates** aus GitHub beim Browserstart und stündlich – die Erweiterung lädt sich
+  danach selbst neu.
 
 | Popup auf YouTube | Popup auf Netflix | Hinweis auf Netflix |
 |---|---|---|
@@ -71,10 +73,42 @@ Syntaxfehler – ein kaputtes Script würde im Browser sonst einfach nicht laufe
 **Laden:** `chrome://extensions` bzw. `opera://extensions` → **Entwicklermodus** an → **Entpackte
 Erweiterung laden** → Ordner `extension\`. Danach das Symbol über das Puzzle-Menü anheften.
 
-- Nach jedem neuen Build oder `git pull`: in `chrome://extensions` bei AdBlock GX auf **Neu laden** –
-  sonst läuft der alte Code weiter.
+- **Automatische Updates** einmal einrichten (siehe unten): `python tools/update_extension.py --install`
+- Nach einem Build lädt sich die Erweiterung selbst neu (sobald ihr Service Worker das nächste Mal
+  aufwacht). Nur beim ersten Mal nach diesem Update von Hand auf **Neu laden** klicken.
 - **Opera GX:** den eingebauten Werbeblocker von Opera ausschalten (Einstellungen → „Werbung
   blockieren“). Er kennt die Seiten-Fixes nicht – South Park meldet dann z. B. „Ad Blocker benutzt“.
+
+## 🔄 Automatische Updates
+
+Was sich auf GitHub ändert (in diesem Repo oder im Desktop-Browser), kommt **spätestens beim nächsten
+Browserstart** an – und stündlich, solange der Browser läuft:
+
+1. Beim Start (und dann jede Stunde) startet die Erweiterung über **Native Messaging**
+   `tools/update_extension.py`.
+2. Das Skript holt beide Repos per `git fetch` und spult vor (nur **Fast-Forward**: eigene Commits
+   und ungespeicherte Änderungen werden nie angefasst – dann steht im Popup ein Hinweis).
+3. Es baut neu, wenn sich der Code geändert hat oder die Filterlisten älter als 12 h sind. Der Build
+   schreibt jede Datei über eine Zwischendatei und zuletzt `generated/build_info.json`.
+4. Die Erweiterung sieht den neuen Build und **lädt sich selbst neu**. Schlägt der Build fehl, bleibt
+   die laufende Version aktiv.
+
+Einmal einrichten (pro Windows-Benutzer, ohne Admin-Rechte; trägt den Updater für Chrome und Opera
+in der Registry ein):
+
+```powershell
+python tools/update_extension.py --install
+```
+
+| Befehl | Wirkung |
+|---|---|
+| `python tools/update_extension.py` | jetzt aktualisieren (Ausgabe in der Konsole) |
+| `--force` | auch ohne Änderungen neu bauen |
+| `--uninstall` | Registrierung entfernen |
+
+Im Popup unter **Updates**: Stand, letzte Prüfung, Hinweise, **Jetzt aktualisieren** und der Schalter
+**Automatisch**. Protokoll: `tools\.cache\update.log`. Nach dem Verschieben des Ordners oder einem
+neuen Python `--install` erneut ausführen (der Updater gilt nur für die Erweiterung aus diesem Ordner).
 
 ## 🎮 Discord-Stream-Modus
 
@@ -134,6 +168,7 @@ selbst abschalten und den Browser nicht mit Parametern neu starten, deshalb:
 | `python dev_tests\dnr_unit.py` | Regel-Konverter: Filterzeilen rein → erwartete Chrome-Regeln raus (48 Tests) |
 | `python dev_tests\ext_smoke.py` | Erweiterung in unsichtbarem Opera GX (eigenes Testprofil): Scripts, Regelsätze, Regex-Regeln, YouTube/Twitch/Netflix, Twitch-Ad-Spoofing-Schalter, Blockieren, Ausblenden trotz CSP, South Park, Ausnahme, Schutz aus, Neustart, `chrome://extensions` ohne Warnungen |
 | `python dev_tests\ext_discord.py` | Discord-Stream-Modus in einem Opera-Fenster außerhalb des Bildschirms: Banner, Popup, Einstellungs-Knopf, Parameter der `.bat` |
+| `python dev_tests\ext_update.py` | Automatische Updates: Erweiterungs-ID, Alarm, Updater antwortet (nach `--install`), Popup, Selbst-Neuladen bei neuem Build (genau einmal); `--live` auch ein echtes Update |
 
 Die Browser-Tests brauchen `pip install websockets` und Opera GX (`--browser` für einen anderen
 Chromium-Browser; Chrome-Stable lädt keine Erweiterungen per Parameter). Die Node-Tests der
@@ -154,9 +189,10 @@ AdBlockGX-Extension/
 │   └── generated/             # vom Build (nicht in Git)
 ├── tools/
 │   ├── build_extension.py     # Build
+│   ├── update_extension.py    # Update aus GitHub (Native Messaging), --install
 │   ├── abp2dnr.py             # Adblock-Syntax → declarativeNetRequest + Kosmetik-Daten
 │   └── create_discord_shortcut.py
-├── dev_tests/                 # dnr_unit.py, ext_smoke.py, ext_discord.py
+├── dev_tests/                 # dnr_unit.py, ext_smoke.py, ext_discord.py, ext_update.py
 ├── docs/                      # Screenshots für diese README
 └── start_opera_discord.bat    # Opera GX im Discord-Stream-Modus
 ```
