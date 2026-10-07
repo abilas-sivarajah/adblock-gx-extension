@@ -1,5 +1,5 @@
 // AdBlock GX popup: protection on/off, exception for the current site, blocked count, status of
-// the YouTube/Twitch/Netflix scripts, Discord stream mode, filter lists. Settings live in background.js
+// the YouTube/Twitch/Netflix scripts, Discord stream mode, Twitch ad spoofing, filter lists. Settings live in background.js
 // (chrome.storage.local); every change goes through it.
 'use strict';
 
@@ -46,7 +46,29 @@ function render() {
 
     renderLists();
     renderDiscord();
+    renderTwitch();
 }
+
+// ---- Twitch ad spoofing (a setting, off by default) ----
+function renderTwitch() {
+    const pill = $('spoofPill');
+    pill.textContent = state.twitchAdSpoofing ? 'Spoofing an' : 'Spoofing aus';
+    pill.className = 'pill' + (state.twitchAdSpoofing ? ' hot' : '');
+    setSwitch($('spoofing'), state.twitchAdSpoofing);
+    const card = $('twitchCard');
+    if (state.twitch && !card.dataset.opened) {  // on Twitch the section is open
+        card.open = true;
+        card.dataset.opened = '1';
+    }
+}
+
+$('spoofing').addEventListener('click', function () {
+    send({type: 'set-twitch-spoofing', enabled: !state.twitchAdSpoofing}).then(function (s) {
+        state = s;
+        render();
+        if (state.twitch && state.enabled && !state.whitelisted) reloadTab();  // the script is chosen on page load
+    }).catch(showError);
+});
 
 // ---- Discord stream mode: hardware acceleration has to be switched off in the browser ----
 const gpu = abGpuInfo();

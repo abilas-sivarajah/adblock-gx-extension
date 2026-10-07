@@ -2,7 +2,9 @@
 // - Site scripts (Twitch, YouTube, Netflix; generated from the desktop browser's scripts/*.js by
 //   tools/build_extension.py) are registered in the page's MAIN world. "Protection off"
 //   unregisters them, the exception list becomes their excludeMatches - the scripts themselves
-//   always run with {enabled: true, whitelist: []}.
+//   always run with {enabled: true, whitelist: []}. Twitch comes in two builds: with and without
+//   ad spoofing (reports blocked ads to Twitch as watched, with the viewer's login) - a setting,
+//   off by default.
 // - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
 //   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
 // - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
@@ -17,12 +19,13 @@ const DEFAULT_SETTINGS = {
     whitelist: [],      // domains without "www.", subdomains included
     rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
     discordHint: true,  // banner on Netflix / Prime Video / Disney+ while hardware acceleration is on
+    twitchAdSpoofing: false,  // generated/twitch_spoofing.js instead of twitch.js
 };
 // above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
 const WHITELIST_PRIORITY = 100;
 
 const SITE_SCRIPTS = [
-    {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js']},
+    {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js'], spoofingJs: ['generated/twitch_spoofing.js']},
     {id: 'ab-youtube', matches: ['*://*.youtube.com/*'], js: ['generated/youtube.js']},
     {id: 'ab-netflix', matches: ['*://*.netflix.com/*'], js: ['generated/netflix.js']},
 ];
@@ -81,7 +84,8 @@ function wantedContentScripts(settings) {
     if (settings.enabled) {
         const exclude = settings.whitelist.map(excludePattern);
         SITE_SCRIPTS.forEach(function (s) {
-            scripts.push({id: s.id, matches: s.matches, js: s.js, world: 'MAIN', runAt: 'document_start', allFrames: true});
+            const js = settings.twitchAdSpoofing && s.spoofingJs || s.js;
+            scripts.push({id: s.id, matches: s.matches, js: js, world: 'MAIN', runAt: 'document_start', allFrames: true});
         });
         scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
                       world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
@@ -364,6 +368,8 @@ async function tabState(tabId) {
         }),
         discordHint: settings.discordHint,
         streaming: tab ? isStreamingSite(tab.url || '') : false,
+        twitchAdSpoofing: settings.twitchAdSpoofing,
+        twitch: /(^|\.)twitch\.tv$/.test(host),
     };
 }
 
@@ -381,6 +387,10 @@ async function onPopupMessage(msg) {
         let list = settings.whitelist.filter(function (d) { return !isWhitelisted(site, [d]) && !isWhitelisted(d, [site]); });
         if (msg.whitelisted) list = list.concat([site]).sort();
         await saveSettings({whitelist: list});
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'set-twitch-spoofing') {
+        await saveSettings({twitchAdSpoofing: !!msg.enabled});
         return tabState(msg.tabId);
     }
     if (msg.type === 'set-discord-hint') {
