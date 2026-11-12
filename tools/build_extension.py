@@ -1,9 +1,12 @@
 """
 Builds the browser extension in extension/ from the sources of the desktop browser
-"AdBlock Browser GX" (github.com/abilas-sivarajah/adblock-browser-gx) - its scripts/*.js stay the
-only source of the site scripts:
+"AdBlock Browser GX" (github.com/abilas-sivarajah/adblock-browser-gx) and this repository:
 
-  generated/twitch.js, youtube.js, netflix.js   scripts/*.js via site_scripts.build_site_scripts()
+  generated/youtube.js, netflix.js              scripts/*.js of the desktop browser via
+                                                site_scripts.build_site_scripts()
+  generated/twitch.js                           scripts/twitch_*.js of THIS repository: the Twitch
+                                                blocker as in GX Tube (Android/Desktop, 11/2026),
+                                                newer than the desktop browser's
   generated/twitch_spoofing.js                  twitch.js with ad spoofing (setting in the popup)
   generated/rules_<list>.json                   filter lists (filter_engine.DEFAULT_FILTER_SOURCES)
                                                 and site_fixes.txt as declarativeNetRequest rules
@@ -30,13 +33,13 @@ usage: python tools/build_extension.py [--update] [--offline] [--browser PATH]
 
 import argparse
 import ast
+import base64
 import datetime
 import hashlib
 import importlib
 import io
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +54,7 @@ sys.path.insert(0, TOOLS_DIR)
 from abp2dnr import CosmeticCollector, convert_list, validate_rules  # noqa: E402
 
 EXT_DIR = os.path.join(ROOT, "extension")
+SCRIPTS_DIR = os.path.join(ROOT, "scripts")  # Twitch blocker (twitch_main.js, twitch_worker.js, twitch_hold.ts)
 GEN_DIR = os.path.join(EXT_DIR, "generated")
 ICON_DIR = os.path.join(EXT_DIR, "icons")
 MANIFEST = os.path.join(EXT_DIR, "manifest.json")
@@ -59,6 +63,11 @@ CACHE_DIR = os.path.join(TOOLS_DIR, ".cache", "filters")
 CACHE_MAX_AGE = 12 * 3600
 BROWSER_REPO = "https://github.com/abilas-sivarajah/adblock-browser-gx"
 DEFAULT_BROWSER_DIR = os.path.join(os.path.dirname(ROOT), "AdBlockBrowser")
+
+# Twitch player types tried for an ad-free copy of the stream during ads (twitch_worker.js):
+# full quality first, "autoplay" (platform android) and "picture-by-picture" (platform ios) are the
+# two separate 360p bridges, asked at the same time - as in GX Tube (Android/Desktop).
+TWITCH_BACKUP_TYPES = ["popout", "frontpage", "mobile_web", "site", "autoplay", "picture-by-picture"]
 
 # Chrome limits (developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest, 10/2026)
 GUARANTEED_MINIMUM_STATIC_RULES = 30000
@@ -229,25 +238,44 @@ def write_json(path, data, one_per_line=False):
     write_file(path, text)
 
 
+def fill(template, name, placeholder, value):
+    """Puts value in for the one placeholder of a script - a missing or doubled placeholder would
+    leave a broken script, so the build stops."""
+    if template.count(placeholder) != 1:
+        sys.exit(f"{placeholder} nicht genau einmal in {name}")
+    return template.replace(placeholder, value)
+
+
+def twitch_script(ad_spoofing):
+    """The Twitch blocker of this repository: twitch_main.js with twitch_worker.js (and the black
+    hold segment) inside. The scripts always run with {enabled: true, whitelist: []} - background.js
+    registers them only where they should run."""
+    with open(os.path.join(SCRIPTS_DIR, "twitch_hold.ts"), "rb") as f:
+        hold = base64.b64encode(f.read()).decode("ascii")
+    worker = fill(read_text(os.path.join(SCRIPTS_DIR, "twitch_worker.js")), "twitch_worker.js",
+                  "__AB_HOLD_SEGMENT__", json.dumps(hold))
+    config = json.dumps({"enabled": True, "whitelist": [], "twitchBackupTypes": TWITCH_BACKUP_TYPES,
+                         "adSpoofing": bool(ad_spoofing)})
+    main = fill(read_text(os.path.join(SCRIPTS_DIR, "twitch_main.js")), "twitch_main.js", "__AB_CONFIG__", config)
+    return fill(main, "twitch_main.js", "__AB_WORKER_HOOK__", json.dumps(worker))
+
+
 def build_site_scripts(browser):
     """Writes the site scripts, returns their paths. Twitch twice: ad spoofing (reports blocked ads
-    as watched, with the viewer's login) is a setting in the popup, off by default."""
+    as watched, with the viewer's login) is a setting in the popup."""
     sys.path.insert(0, browser)
     site_scripts = importlib.import_module("site_scripts")  # desktop browser module: json/os only
-    twitch, youtube, netflix = site_scripts.build_site_scripts(True, [])[:3]
-    spoofing = re.compile(r'"adSpoofing": (?:true|false)')  # in the config JSON of twitch_main.js
-    if len(spoofing.findall(twitch)) != 1:
-        sys.exit('"adSpoofing" nicht (eindeutig) in der Twitch-Konfiguration des Desktop-Browsers - '
-                 "dort git pull?")
+    youtube, netflix = site_scripts.build_site_scripts(True, [])[1:3]
     paths = []
     for name, code, source in (
-            ("twitch.js", spoofing.sub('"adSpoofing": false', twitch), "twitch_main.js + twitch_worker.js"),
-            ("twitch_spoofing.js", spoofing.sub('"adSpoofing": true', twitch),
-             "twitch_main.js + twitch_worker.js (Ad-Spoofing an)"),
-            ("youtube.js", youtube, "youtube.js"), ("netflix.js", netflix, "netflix.js")):
+            ("twitch.js", twitch_script(False), "scripts/twitch_main.js + twitch_worker.js of this repository"),
+            ("twitch_spoofing.js", twitch_script(True),
+             "scripts/twitch_main.js + twitch_worker.js of this repository (Ad-Spoofing an)"),
+            ("youtube.js", youtube, "scripts/youtube.js of the desktop browser"),
+            ("netflix.js", netflix, "scripts/netflix.js of the desktop browser")):
         paths.append(os.path.join(GEN_DIR, name))
-        write_file(paths[-1], f"// Generated by tools/build_extension.py from scripts/{source} - do not edit.\n" + code)
-    print("Seiten-Scripts: twitch.js (+ twitch_spoofing.js), youtube.js, netflix.js")
+        write_file(paths[-1], f"// Generated by tools/build_extension.py from {source} - do not edit.\n" + code)
+    print("Seiten-Scripts: twitch.js (+ twitch_spoofing.js) aus scripts/, youtube.js und netflix.js vom Desktop-Browser")
     return paths
 
 
@@ -317,7 +345,10 @@ def main():
     commit = browser_commit(browser)
     print(f"Desktop-Browser: {browser}" + (f" (Commit {commit})" if commit else ""))
     os.makedirs(GEN_DIR, exist_ok=True)
-    script_errors = check_scripts(build_site_scripts(browser))
+    # the generated scripts and the extension's own (service worker, popup, content scripts)
+    own = [os.path.join(dp, n) for dp, dn, fn in os.walk(EXT_DIR) for n in sorted(fn)
+           if n.endswith(".js") and os.path.relpath(dp, EXT_DIR).split(os.sep)[0] not in ("generated", "_metadata")]
+    script_errors = check_scripts(build_site_scripts(browser) + sorted(own))
     build_icons(browser)
 
     cosmetics = CosmeticCollector()

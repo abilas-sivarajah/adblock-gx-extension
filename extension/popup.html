@@ -50,13 +50,38 @@
     </button>
 </details>
 
-<details class="card" id="twitchCard">
-    <summary><h2>Twitch</h2><span class="pill" id="spoofPill">…</span></summary>
-    <button id="spoofing" class="row" type="button" aria-pressed="false">
-        <span class="label"><b>Ad-Spoofing</b><small>blockierte Werbung als gesehen melden</small></span>
+<details class="card" id="youtubeCard">
+    <summary><h2>YouTube</h2><span class="pill" id="ytPill">…</span></summary>
+    <button id="sponsorBlock" class="row" type="button" aria-pressed="true">
+        <span class="label"><b>SponsorBlock</b><small>gesponserte Abschnitte im Video überspringen</small></span>
+        <span class="switch" aria-hidden="true"></span>
+    </button>
+    <div class="chips" id="sbCats"></div>
+    <p class="small muted" id="sbNote">Mit „Rückgängig“, stumm markierte Abschnitte werden stumm geschaltet,
+        dazu das Highlight (◆) und der Hinweis „Gesponsertes Video“. Die Video-ID bleibt privat
+        (Abfrage über Hash-Präfix).</p>
+    <button id="ytHideShorts" class="row" type="button" aria-pressed="false">
+        <span class="label"><b>Shorts ausblenden</b><small>überall – Shorts-Links öffnen als normales Video</small></span>
         <span class="switch off" aria-hidden="true"></span>
     </button>
-    <p class="small muted">Meldet mit deinem Twitch-Konto Werbung als gesehen, die nie lief – kann gegen die
+    <button id="ytOriginalAudio" class="row" type="button" aria-pressed="true">
+        <span class="label"><b>Immer Originalton</b><small>keine Synchronfassung oder KI-Übersetzung</small></span>
+        <span class="switch" aria-hidden="true"></span>
+    </button>
+    <button id="ytDislikes" class="row" type="button" aria-pressed="false">
+        <span class="label"><b>Dislikes anzeigen</b><small>Return YouTube Dislike – schickt die Video-ID dorthin</small></span>
+        <span class="switch off" aria-hidden="true"></span>
+    </button>
+</details>
+
+<details class="card" id="twitchCard">
+    <summary><h2>Twitch</h2><span class="pill" id="spoofPill">…</span></summary>
+    <button id="spoofing" class="row" type="button" aria-pressed="true">
+        <span class="label"><b>Werbung als gesehen melden</b><small>Ad-Spoofing – zuerst versucht, oft endet die Pause sofort</small></span>
+        <span class="switch" aria-hidden="true"></span>
+    </button>
+    <p class="small muted">Sonst springt ein werbefreier Ersatz-Stream ein (sofort in 360p, dann volle Qualität).
+        Das Melden läuft über dein Twitch-Konto für Werbung, die nie lief – kann gegen die
         Nutzungsbedingungen von Twitch verstoßen. Wirkt sofort, ohne Neuladen.</p>
 </details>
 

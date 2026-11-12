@@ -1,11 +1,17 @@
 // AdBlock GX - service worker.
-// - Site scripts (Twitch, YouTube, Netflix; generated from the desktop browser's scripts/*.js by
+// - Site scripts (YouTube, Netflix from the desktop browser's scripts/*.js; Twitch from scripts/ of
+//   this repository - the blocker of GX Tube Android/Desktop; all built by
 //   tools/build_extension.py) are registered in the page's MAIN world. "Protection off"
 //   unregisters them, the exception list becomes their excludeMatches - the scripts themselves
 //   always run with {enabled: true, whitelist: []}. Twitch comes in two builds: with and without
-//   ad spoofing (reports blocked ads as watched, with the viewer's login) - a setting, off by
-//   default. The flag is baked into generated/twitch.js vs twitch_spoofing.js for the next page
-//   load; the current Twitch tab is told over content/twitch_bridge.js, so no reload is needed.
+//   ad spoofing (reports an ad as watched first, with the viewer's login; a backup session is the
+//   fallback) - a setting, on as in GX Tube. The flag is baked into generated/twitch.js vs
+//   twitch_spoofing.js for the next page load; the current Twitch tab is told over
+//   content/twitch_bridge.js, so no reload is needed.
+// - YouTube extras as in GX Tube: content/youtube_extras.js (SponsorBlock, Shorts hidden,
+//   Return YouTube Dislike) asks here for its settings and the segments/votes (sponsorblock.js -
+//   the requests come from this worker, so YouTube's CSP does not matter);
+//   content/youtube_audio.js (page world) keeps the original audio track.
 // - Network blocking: the static declarativeNetRequest rule sets (generated/rules_*.json), enabled
 //   as far as Chrome's rule limit allows; the exception list is one dynamic allowAllRequests rule.
 // - Element hiding: content/cosmetic.js reports each frame's classes/ids, the matching rules of
@@ -19,17 +25,29 @@
 //   by the build - also a build run by hand) makes the extension reload itself.
 'use strict';
 
+importScripts('sponsorblock.js');  // self.abSponsorBlock
+
+const SETTINGS_VERSION = 2;
 const DEFAULT_SETTINGS = {
     enabled: true,
     whitelist: [],      // domains without "www.", subdomains included
     rulesets: {},       // rule set id -> on/off as chosen in the popup (otherwise its default)
     discordHint: true,  // banner on Netflix / Prime Video / Disney+ while hardware acceleration is on
-    twitchAdSpoofing: false,  // generated/twitch_spoofing.js instead of twitch.js
+    twitchAdSpoofing: true,   // generated/twitch_spoofing.js instead of twitch.js (as in GX Tube)
     autoUpdate: true,   // update from GitHub at browser start and hourly
+    // YouTube, as in GX Tube (Android / Desktop)
+    sponsorBlock: true,
+    sponsorCategories: abSponsorBlock.DEFAULT_CATEGORIES.slice(),
+    ytHideShorts: false,
+    ytOriginalAudio: true,
+    ytDislikes: false,  // sends the video id to returnyoutubedislikeapi.com
+    settingsVersion: SETTINGS_VERSION,
 };
+const YOUTUBE_SWITCHES = ['sponsorBlock', 'ytHideShorts', 'ytOriginalAudio', 'ytDislikes'];
 // above every static rule (tools/abp2dnr.py: 1 block ... 4 site_fixes exceptions)
 const WHITELIST_PRIORITY = 100;
 
+const YOUTUBE = ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*'];
 const SITE_SCRIPTS = [
     {id: 'ab-twitch', matches: ['*://*.twitch.tv/*'], js: ['generated/twitch.js'], spoofingJs: ['generated/twitch_spoofing.js']},
     {id: 'ab-youtube', matches: ['*://*.youtube.com/*'], js: ['generated/youtube.js']},
@@ -48,7 +66,18 @@ let settingsCache = null;
 async function getSettings() {
     if (!settingsCache) {
         const stored = (await chrome.storage.local.get('settings')).settings || {};
-        settingsCache = Object.assign({}, DEFAULT_SETTINGS, stored);
+        const settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+        if (Object.keys(stored).length && (stored.settingsVersion || 1) < 2) {
+            // 11/2026: ad spoofing goes first, as in GX Tube - switched on once for everybody
+            // (saveSettings() always stored the old default); the popup switches it off again
+            settings.twitchAdSpoofing = true;
+        }
+        settings.sponsorCategories = abSponsorBlock.cleanCategories(settings.sponsorCategories);
+        settings.settingsVersion = SETTINGS_VERSION;
+        if (Object.keys(stored).length && stored.settingsVersion !== SETTINGS_VERSION) {
+            await chrome.storage.local.set({settings: settings});
+        }
+        settingsCache = settings;
     }
     return settingsCache;
 }
@@ -95,6 +124,11 @@ function wantedContentScripts(settings) {
         });
         scripts.push({id: 'ab-twitch-bridge', matches: ['*://*.twitch.tv/*'], js: ['content/twitch_bridge.js'],
                       world: 'ISOLATED', runAt: 'document_start', allFrames: true});
+        // SponsorBlock, Shorts, dislikes (they ask for their settings themselves) and the original audio
+        scripts.push({id: 'ab-yt-extras', matches: YOUTUBE, js: ['content/youtube_extras.js'],
+                      css: ['content/youtube_extras.css'], world: 'ISOLATED', runAt: 'document_start', allFrames: true});
+        scripts.push({id: 'ab-yt-audio', matches: YOUTUBE, js: ['content/youtube_audio.js'],
+                      world: 'MAIN', runAt: 'document_start', allFrames: true});
         scripts.push({id: 'ab-cosmetic', matches: ['http://*/*', 'https://*/*'], js: ['content/cosmetic.js'],
                       world: 'ISOLATED', runAt: 'document_start', allFrames: true, matchOriginAsFallback: true});
         scripts.forEach(function (s) { if (exclude.length) s.excludeMatches = exclude; });
@@ -109,7 +143,7 @@ function wantedContentScripts(settings) {
 
 // compare registrations by what matters (Chrome fills in defaults when reading them back)
 function scriptSignature(s) {
-    return JSON.stringify([s.id, s.matches, s.excludeMatches || [], s.js, s.world || 'ISOLATED',
+    return JSON.stringify([s.id, s.matches, s.excludeMatches || [], s.js, s.css || [], s.world || 'ISOLATED',
                            s.runAt || 'document_idle', !!s.allFrames, !!s.matchOriginAsFallback]);
 }
 
@@ -277,6 +311,56 @@ async function onCosmeticMessage(msg, sender) {
         await chrome.scripting.insertCSS({target: target, css: css, origin: 'USER'}).catch(function () {});
     }
     return {active: !ctx.generichide};
+}
+
+// ---- YouTube extras (content/youtube_extras.js) ----
+const ytCache = new Map();  // 'sb|<id>|<categories>' / 'votes|<id>' -> {at, value}
+const YT_TTL_MS = {sb: 30 * 60 * 1000, votes: 10 * 60 * 1000};
+
+function cached(key, ttl, load) {
+    const hit = ytCache.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.value;
+    const value = load();
+    ytCache.set(key, {at: Date.now(), value: value});
+    // a failed request (null / nothing found) is not kept as long
+    Promise.resolve(value).then(function (v) {
+        if (!v || (v.segments && !v.segments.length && !v.highlight && !v.full)) {
+            const entry = ytCache.get(key);
+            if (entry && entry.value === value) entry.at = Date.now() - ttl + 2 * 60 * 1000;
+        }
+    });
+    if (ytCache.size > 300) ytCache.delete(ytCache.keys().next().value);
+    return value;
+}
+
+function isYouTube(host) {
+    return /(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(host);
+}
+
+async function onYouTubeMessage(msg, sender) {
+    const settings = await getSettings();
+    const tab = sender.tab;
+    const frameHost = hostOf(sender.url || '');
+    const active = !!tab && settings.enabled && isYouTube(frameHost) && !isWhitelisted(frameHost, settings.whitelist) &&
+                   !isWhitelisted(hostOf(tab.url || ''), settings.whitelist);
+    if (msg.type === 'yt-init') {
+        return {active: active, sponsorBlock: settings.sponsorBlock, categories: settings.sponsorCategories,
+                hideShorts: settings.ytHideShorts, originalAudio: settings.ytOriginalAudio, dislikes: settings.ytDislikes};
+    }
+    const id = String(msg.videoId || '');
+    if (!active || !/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+    if (msg.type === 'yt-segments') {
+        if (!settings.sponsorBlock) return abSponsorBlock.EMPTY;
+        const cats = settings.sponsorCategories;
+        return cached('sb|' + id + '|' + cats.join(','), YT_TTL_MS.sb, function () {
+            return abSponsorBlock.fetchSegments(id, cats);
+        });
+    }
+    if (msg.type === 'yt-votes') {
+        if (!settings.ytDislikes) return null;
+        return cached('votes|' + id, YT_TTL_MS.votes, function () { return abSponsorBlock.fetchVotes(id); });
+    }
+    return null;
 }
 
 // ---- Discord stream mode ----
@@ -490,6 +574,15 @@ async function tabState(tabId) {
         streaming: tab ? isStreamingSite(tab.url || '') : false,
         twitchAdSpoofing: settings.twitchAdSpoofing,
         twitch: /(^|\.)twitch\.tv$/.test(host),
+        youtube: {
+            here: isYouTube(host),
+            sponsorBlock: settings.sponsorBlock,
+            categories: settings.sponsorCategories,
+            allCategories: abSponsorBlock.CATEGORIES,
+            ytHideShorts: settings.ytHideShorts,
+            ytOriginalAudio: settings.ytOriginalAudio,
+            ytDislikes: settings.ytDislikes,
+        },
         update: await updateState(settings),
     };
 }
@@ -516,6 +609,14 @@ async function onPopupMessage(msg) {
         await Promise.all(tabs.map(function (tab) {
             return chrome.tabs.sendMessage(tab.id, {type: 'twitch-spoofing', enabled: !!msg.enabled}).catch(function () {});
         }));
+        return tabState(msg.tabId);
+    }
+    if (msg.type === 'set-youtube') {
+        const patch = {};
+        if (YOUTUBE_SWITCHES.includes(msg.key)) patch[msg.key] = !!msg.value;
+        else if (msg.key === 'sponsorCategories') patch.sponsorCategories = abSponsorBlock.cleanCategories(msg.value);
+        else throw new Error('unbekannte Einstellung ' + msg.key);
+        await saveSettings(patch);
         return tabState(msg.tabId);
     }
     if (msg.type === 'set-discord-hint') {
@@ -553,6 +654,8 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         onCosmeticMessage(msg, sender).then(sendResponse, fail);
     } else if (['discord-hint-check', 'discord-hint-off', 'open-gpu-settings'].includes(msg.type)) {
         onDiscordMessage(msg, sender).then(sendResponse, fail);
+    } else if (['yt-init', 'yt-segments', 'yt-votes'].includes(msg.type)) {
+        onYouTubeMessage(msg, sender).then(sendResponse, fail);
     } else {
         return false;
     }

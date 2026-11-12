@@ -220,7 +220,8 @@ def main():
     scripts = sw.eval("chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id + ':' + x.world))")
     check("Scripts registriert", set(scripts) == {"ab-twitch:MAIN", "ab-youtube:MAIN", "ab-netflix:MAIN",
                                                     "ab-twitch-bridge:ISOLATED", "ab-cosmetic:ISOLATED",
-                                                    "ab-discord:ISOLATED"}, scripts)
+                                                    "ab-discord:ISOLATED", "ab-yt-extras:ISOLATED",
+                                                    "ab-yt-audio:MAIN"}, scripts)
     enabled = sw.eval("chrome.declarativeNetRequest.getEnabledRulesets()")
     meta = json.load(open(os.path.join(EXT, "generated", "rulesets.json"), encoding="utf-8"))
     check("Regelsätze aktiv", set(enabled) == {r["id"] for r in meta["rulesets"]}, enabled)
@@ -235,6 +236,7 @@ def main():
     time.sleep(8)
     check("YouTube: Script läuft (window.__abYouTube)", yt.eval("JSON.stringify(window.__abYouTube || null)") != "null",
           yt.eval("JSON.stringify(window.__abYouTube || null)"))
+    check("YouTube: Originalton-Script läuft (window.__abYtAudio)", yt.eval("!!window.__abYtAudio"))
     yt_tab = tab_id(sw, "youtube.com")
     ext_id = sw.eval("chrome.runtime.id")
     pop, pop_id = br.open(f"chrome-extension://{ext_id}/popup.html?tab={yt_tab}")
@@ -261,12 +263,12 @@ def main():
     br.close_page(tw_id)
     twitch_js = ("chrome.scripting.getRegisteredContentScripts({ids: ['ab-twitch']}).then(s => s[0].js)")
     before = sw.eval(twitch_js)
-    sw.eval("saveSettings({twitchAdSpoofing: true})")
-    on = sw.eval(twitch_js)
     sw.eval("saveSettings({twitchAdSpoofing: false})")
-    check("Twitch: Ad-Spoofing standardmäßig aus, Schalter wählt twitch_spoofing.js",
-          before == ["generated/twitch.js"] and on == ["generated/twitch_spoofing.js"]
-          and sw.eval(twitch_js) == ["generated/twitch.js"], (before, on))
+    off = sw.eval(twitch_js)
+    sw.eval("saveSettings({twitchAdSpoofing: true})")
+    check("Twitch: Ad-Spoofing standardmäßig an (wie GX Tube), Schalter wählt twitch.js",
+          before == ["generated/twitch_spoofing.js"] and off == ["generated/twitch.js"]
+          and sw.eval(twitch_js) == ["generated/twitch_spoofing.js"], (before, off))
 
     # ---- network blocking ----
     news, news_id = br.open("https://www.spiegel.de/")

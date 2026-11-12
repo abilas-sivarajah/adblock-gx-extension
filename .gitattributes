@@ -1,0 +1,2 @@
+# Twitch hold segment (MPEG-TS video, not TypeScript)
+scripts/twitch_hold.ts binary

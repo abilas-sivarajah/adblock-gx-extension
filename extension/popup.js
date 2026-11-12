@@ -1,5 +1,6 @@
 // AdBlock GX popup: protection on/off, exception for the current site, blocked count, status of
-// the YouTube/Twitch/Netflix scripts, Discord stream mode, Twitch ad spoofing, filter lists, updates.
+// the YouTube/Twitch/Netflix scripts, Discord stream mode, YouTube extras (SponsorBlock, Shorts,
+// original audio, dislikes), Twitch ad spoofing, filter lists, updates.
 // Settings live in background.js (chrome.storage.local); every change goes through it.
 'use strict';
 
@@ -46,6 +47,7 @@ function render() {
 
     renderLists();
     renderDiscord();
+    renderYouTube();
     renderTwitch();
     renderUpdate();
 }
@@ -137,11 +139,55 @@ $('autoUpdate').addEventListener('click', function () {
     }).catch(showError);
 });
 
-// ---- Twitch ad spoofing (a setting, off by default) ----
+// ---- YouTube extras (content/youtube_extras.js, youtube_audio.js) ----
+function setYouTube(key, value) {
+    send({type: 'set-youtube', key: key, value: value}).then(function (s) {
+        state = s;
+        render();
+    }).catch(showError);
+}
+
+function renderYouTube() {
+    const yt = state.youtube;
+    const card = $('youtubeCard');
+    card.classList.toggle('hidden', !yt);  // a popup.js newer than the running background.js
+    if (!yt) return;
+    const pill = $('ytPill');
+    pill.textContent = yt.sponsorBlock ? 'SponsorBlock an' : 'SponsorBlock aus';
+    pill.className = 'pill' + (yt.sponsorBlock ? ' ok' : '');
+    setSwitch($('sponsorBlock'), yt.sponsorBlock);
+    const chips = $('sbCats');
+    chips.textContent = '';
+    Object.keys(yt.allCategories).forEach(function (key) {
+        const chosen = yt.categories.includes(key);
+        const chip = el('button', 'chip' + (chosen ? ' on' : ''), yt.allCategories[key]);
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(chosen));
+        chip.disabled = !yt.sponsorBlock;
+        chip.addEventListener('click', function () {
+            setYouTube('sponsorCategories', chosen ? yt.categories.filter(function (c) { return c !== key; })
+                                                  : yt.categories.concat([key]));
+        });
+        chips.appendChild(chip);
+    });
+    chips.classList.toggle('hidden', !yt.sponsorBlock);
+    $('sbNote').classList.toggle('hidden', !yt.sponsorBlock);
+    ['ytHideShorts', 'ytOriginalAudio', 'ytDislikes'].forEach(function (key) { setSwitch($(key), yt[key]); });
+    if (yt.here && !card.dataset.opened) {  // on YouTube the section is open
+        card.open = true;
+        card.dataset.opened = '1';
+    }
+}
+
+['sponsorBlock', 'ytHideShorts', 'ytOriginalAudio', 'ytDislikes'].forEach(function (key) {
+    $(key).addEventListener('click', function () { setYouTube(key, !state.youtube[key]); });
+});
+
+// ---- Twitch ad spoofing (a setting, on as in GX Tube) ----
 function renderTwitch() {
     const pill = $('spoofPill');
     pill.textContent = state.twitchAdSpoofing ? 'Spoofing an' : 'Spoofing aus';
-    pill.className = 'pill' + (state.twitchAdSpoofing ? ' hot' : '');
+    pill.className = 'pill' + (state.twitchAdSpoofing ? ' ok' : '');
     setSwitch($('spoofing'), state.twitchAdSpoofing);
     const card = $('twitchCard');
     if (state.twitch && !card.dataset.opened) {  // on Twitch the section is open
@@ -236,6 +282,12 @@ function times(n, what) {
     return what + ' ' + number(n) + '×';
 }
 
+function clock(sec) {
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = String(sec % 60).padStart(2, '0');
+    return h ? h + ':' + String(m).padStart(2, '0') + ':' + s : m + ':' + s;
+}
+
 function describeSite(s) {
     const lines = [];
     if (s.yt) {
@@ -243,6 +295,17 @@ function describeSite(s) {
         if (s.yt.skipped) lines.push(['YouTube', times(s.yt.skipped, 'durchgerutschte Werbung übersprungen')]);
         if (s.yt.dialogs) lines.push(['YouTube', times(s.yt.dialogs, 'Adblock-Hinweis entfernt')]);
     }
+    const x = s.ytx;
+    if (x && x.sponsorBlock && x.videoId) {
+        lines.push(['Sponsor', x.segments ? x.segments + (x.segments === 1 ? ' Abschnitt' : ' Abschnitte') +
+                    ' (' + x.categories.join(', ') + ')' : 'nichts markiert in diesem Video']);
+        if (x.skipped) lines.push(['Sponsor', times(x.skipped, 'übersprungen') + ', ' + clock(x.savedSeconds) + ' gespart']);
+        if (x.muted) lines.push(['Sponsor', times(x.muted, 'stumm geschaltet')]);
+        if (x.highlight != null) lines.push(['Sponsor', 'Highlight bei ' + clock(x.highlight)]);
+        if (x.full) lines.push(['Sponsor', x.full + ' (ganzes Video)', 'warn']);
+    }
+    if (x && x.dislikes != null) lines.push(['YouTube', number(x.dislikes) + ' Dislikes (geschätzt)']);
+    if (s.yta && s.yta.switched) lines.push(['YouTube', times(s.yta.switched, 'auf Originalton umgeschaltet')]);
     if (s.tw) {
         if (s.tw.overlayActive) lines.push(['Twitch', 'Werbepause läuft – ausgeblendet']);
         if (s.tw.bridgeActive) lines.push(['Twitch', 'Werbung übersprungen – gerade 360p-Ersatz']);
@@ -254,8 +317,10 @@ function describeSite(s) {
         if (s.tw.holds) lines.push(['Twitch', times(s.tw.holds, 'Werbepause durch schwarzes Bild ersetzt')]);
         if (s.tw.masked) lines.push(['Twitch', times(s.tw.masked, 'Werbepause abgedeckt')]);
         if (s.tw.spoofedAds) lines.push(['Twitch', times(s.tw.spoofedAds, 'Werbung als gesehen gemeldet (Spoofing)')]);
+        if (s.tw.forcedSwitches) lines.push(['Twitch', times(s.tw.forcedSwitches, 'sofort gewechselt statt schwarzem Bild')]);
         if (s.tw.adSeconds) lines.push(['Twitch', number(s.tw.adSeconds) + ' s Werbung nicht gezeigt']);
         if (s.tw.vodAdsBlocked) lines.push(['Twitch', times(s.tw.vodAdsBlocked, 'VOD-Werbung blockiert')]);
+        if (s.tw.adRequestsBlocked) lines.push(['Twitch', times(s.tw.adRequestsBlocked, 'Werbe-Anfrage blockiert')]);
     }
     if (s.nf) {
         lines.push(['Netflix', s.nf.breaksRemoved ? number(s.nf.breaksRemoved) + ' Werbepause(n) entfernt'
@@ -267,9 +332,19 @@ function describeSite(s) {
     return lines;
 }
 
+// what the isolated-world YouTube script (content/youtube_extras.js) knows
+function loadExtras() {
+    if (!/(^|\.)youtube\.com$/.test(state.host)) return Promise.resolve(null);
+    return chrome.scripting.executeScript({
+        target: {tabId: tab.id},
+        func: function () { return window.__abYtExtras ? JSON.parse(JSON.stringify(window.__abYtExtras)) : null; },
+    }).then(function (r) { return r && r[0] && r[0].result; }, function () { return null; });
+}
+
 function loadSiteStatus() {
     const known = /(^|\.)(youtube\.com|twitch\.tv|netflix\.com)$/.test(state.host);
     if (!known || !state.enabled || state.whitelisted) return;
+    const extras = loadExtras();
     chrome.scripting.executeScript({
         target: {tabId: tab.id},
         world: 'MAIN',
@@ -282,20 +357,27 @@ function loadSiteStatus() {
             };
             return {
                 yt: pick(window.__abYouTube, ['pruned', 'skipped', 'dialogs']),
+                yta: pick(window.__abYtAudio, ['switched']),
                 tw: pick(window.__abTwitch, ['hookedWorkers', 'adBreaks', 'replaced', 'masked', 'holds', 'nativeReturns', 'adSeconds',
-                                             'vodAdsBlocked', 'overlayActive', 'bridgeActive', 'lastBackupType', 'spoofedAds']),
+                                             'vodAdsBlocked', 'adRequestsBlocked', 'forcedSwitches', 'overlayActive',
+                                             'bridgeActive', 'lastBackupType', 'spoofedAds']),
                 nf: pick(window.__abNetflix, ['breaksRemoved', 'pauseAdsRemoved', 'adsShown', 'pruning']),
             };
         },
     }).then(function (results) {
-        const s = results && results[0] && results[0].result;
+        return extras.then(function (x) {
+            const s = results && results[0] && results[0].result;
+            if (s) s.ytx = x;
+            return s;
+        });
+    }).then(function (s) {
         let lines = s ? describeSite(s) : [];
         if (!lines.length) lines = [['Hinweis', 'Script noch nicht aktiv – Seite neu laden']];
         const list = $('siteStatus');
         list.textContent = '';
         lines.forEach(function (l) {
             const li = el('li');
-            li.appendChild(el('span', 'tag', l[0]));
+            li.appendChild(el('span', 'tag' + (l[2] ? ' ' + l[2] : ''), l[0]));
             li.appendChild(document.createTextNode(l[1]));
             list.appendChild(li);
         });

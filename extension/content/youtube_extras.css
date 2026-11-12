@@ -1,0 +1,130 @@
+/* YouTube extras (content/youtube_extras.js). Injected by the browser as a content-script style
+   sheet, so YouTube's CSP does not matter. */
+
+/* ---- Shorts hidden (popup: "Shorts ausblenden"): home, subscriptions, search, channels,
+   related videos, side menu - as "Shorts komplett ausschalten" in GX Tube ---- */
+html[data-abgx-no-shorts] ytd-reel-shelf-renderer,
+html[data-abgx-no-shorts] ytd-rich-shelf-renderer[is-shorts],
+html[data-abgx-no-shorts] ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+html[data-abgx-no-shorts] ytd-rich-section-renderer:has(ytm-shorts-lockup-view-model),
+html[data-abgx-no-shorts] ytd-rich-section-renderer:has(ytm-shorts-lockup-view-model-v2),
+html[data-abgx-no-shorts] grid-shelf-view-model:has(ytm-shorts-lockup-view-model),
+html[data-abgx-no-shorts] grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2),
+html[data-abgx-no-shorts] ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model),
+html[data-abgx-no-shorts] ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model-v2),
+html[data-abgx-no-shorts] ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+html[data-abgx-no-shorts] ytd-video-renderer:has(a#thumbnail[href^="/shorts/"]),
+html[data-abgx-no-shorts] ytd-grid-video-renderer:has(a#thumbnail[href^="/shorts/"]),
+html[data-abgx-no-shorts] ytd-compact-video-renderer:has(a[href^="/shorts/"]),
+html[data-abgx-no-shorts] yt-lockup-view-model:has(a[href^="/shorts/"]),
+html[data-abgx-no-shorts] ytm-shorts-lockup-view-model,
+html[data-abgx-no-shorts] ytm-shorts-lockup-view-model-v2,
+html[data-abgx-no-shorts] ytd-guide-entry-renderer:has(a[href^="/shorts"]),
+html[data-abgx-no-shorts] ytd-guide-entry-renderer:has(a[title="Shorts"]),
+html[data-abgx-no-shorts] ytd-mini-guide-entry-renderer:has(a[href^="/shorts"]),
+html[data-abgx-no-shorts] ytd-mini-guide-entry-renderer[aria-label="Shorts"],
+html[data-abgx-no-shorts] yt-tab-shape[tab-title="Shorts"],
+html[data-abgx-no-shorts] ytm-reel-shelf-renderer,
+html[data-abgx-no-shorts] ytm-pivot-bar-item-renderer:has(.pivot-shorts) {
+    display: none !important;
+}
+
+/* ---- SponsorBlock: note with "Rückgängig" ---- */
+.abgx-toast {
+    position: absolute;
+    left: 12px;
+    bottom: 64px;
+    z-index: 70;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100% - 24px);
+    padding: 7px 8px 7px 12px;
+    border: 1px solid rgba(250, 30, 78, .75);
+    border-radius: 10px;
+    background: rgba(11, 9, 16, .9);
+    box-shadow: 0 0 14px rgba(250, 30, 78, .3);
+    color: #f2eff8;
+    font: 500 13px/1.35 Roboto, "Segoe UI", Arial, sans-serif;
+    pointer-events: auto;
+}
+
+.abgx-toast.show { display: flex; }
+.abgx-toast::before { content: "\1F6E1\FE0F"; }
+.abgx-toast-text { min-width: 0; }
+
+.abgx-toast button {
+    flex: none;
+    padding: 4px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: #fa1e4e;
+    color: #fff;
+    font: 600 12.5px/1.2 Roboto, "Segoe UI", Arial, sans-serif;
+    cursor: pointer;
+}
+
+.abgx-toast button:hover { filter: brightness(1.12); }
+
+/* ---- SponsorBlock on the progress bar: skipped green, muted yellow, highlight ◆ ---- */
+.abgx-sb-bar {
+    position: absolute;
+    inset: 0;
+    z-index: 42;
+    pointer-events: none;
+}
+
+.abgx-sb-strip {
+    position: absolute;
+    inset: 0;
+    transform: scaleY(.6);  /* like YouTube's own bar, full height while hovered */
+    transition: transform .1s cubic-bezier(.4, 0, 1, 1);
+}
+
+.ytp-progress-bar-container:hover .abgx-sb-strip,
+.ytp-progress-bar:hover .abgx-sb-strip { transform: none; }
+
+.abgx-sb-seg {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: #00d400;
+    opacity: .85;
+}
+
+.abgx-sb-seg.mute { background: #ffd400; }
+
+.abgx-sb-poi {
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    margin: -4px 0 0 -4px;
+    transform: rotate(45deg);
+    border: 1.5px solid #000;
+    border-radius: 1px;
+    background: #ff70ff;
+}
+
+/* ---- "◆ Highlight" in the player's controls ---- */
+.ytp-button.abgx-hl-btn {
+    display: inline-flex !important;
+    align-items: center;
+    width: auto !important;
+    padding: 0 10px !important;
+    color: #ff70ff;
+    font: 500 13px/1 Roboto, "Segoe UI", Arial, sans-serif;
+    white-space: nowrap;
+    vertical-align: top;
+}
+
+/* ---- Return YouTube Dislike ---- */
+.abgx-dislikes-btn {
+    width: auto !important;
+    padding-right: 14px !important;
+}
+
+.abgx-dislikes {
+    margin-left: 6px;
+    font-weight: 500;
+}
